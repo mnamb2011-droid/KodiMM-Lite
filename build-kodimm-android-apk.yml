@@ -1,0 +1,939 @@
+name: Build KodiMM Lite Android GUI (.apk)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Generate KodiMM Lite Android project
+        run: |
+          mkdir -p app/src/main/java/com/kodimm/lite app/src/main/res/drawable
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "KodiMMLite"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=false
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.kodimm.lite'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.kodimm.lite'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#0F172A"
+                  android:pathData="M0,0h108v108h-108z" />
+              <path
+                  android:fillColor="#E50914"
+                  android:pathData="M34,28 L80,54 L34,80 Z" />
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="KodiMM Lite"
+                  android:requestLegacyExternalStorage="true"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="stateHidden|adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/kodimm/lite/MainActivity.java
+          package com.kodimm.lite;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.provider.Settings;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.CheckBox;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.ProgressBar;
+          import android.widget.RadioButton;
+          import android.widget.RadioGroup;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          import java.io.BufferedReader;
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.io.InputStream;
+          import java.io.InputStreamReader;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.net.URLEncoder;
+          import java.nio.charset.StandardCharsets;
+          import java.util.ArrayList;
+          import java.util.Arrays;
+          import java.util.HashMap;
+          import java.util.HashSet;
+          import java.util.List;
+          import java.util.Locale;
+          import java.util.Map;
+          import java.util.Set;
+          import java.util.regex.Matcher;
+          import java.util.regex.Pattern;
+
+          public class MainActivity extends Activity {
+
+              private static final String PREFS = "kodimm_prefs";
+              private static final String TMDB_API = "https://api.themoviedb.org/3";
+              private static final String TMDB_IMG = "https://image.tmdb.org/t/p";
+
+              private static final Set<String> VIDEO_EXTS = new HashSet<>(Arrays.asList(
+                  ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".ts", ".wmv", ".flv", ".webm"
+              ));
+
+              private static final Pattern YEAR_PATTERN = Pattern.compile("[\\(\\[\\.\\s_-]((?:19|20)\\d{2})[\\)\\]\\.\\s_-]?");
+              private static final Pattern JUNK_PATTERN = Pattern.compile(
+                  "(?i)\\b(480p|720p|1080p|2160p|4k|uhd|hdr|hdr10|dv|web[-.\\s]?dl|webrip|bluray|bdrip|" +
+                  "brrip|dvdrip|hdrip|hdtv|x264|x265|h264|h265|hevc|av1|aac|ac3|dts|atmos|5\\.1|7\\.1|" +
+                  "10bit|8bit|remux|yify|yts|rarbg|extended|unrated|proper|repack|subbed|dubbed|arabic|multi)\\b"
+              );
+              private static final Pattern EPISODE_PATTERN = Pattern.compile("[Ss](\\d{1,2})[Ee](\\d{1,3})|(\\d{1,2})x(\\d{1,3})");
+
+              private EditText etApiKey;
+              private EditText etFolder;
+              private RadioButton rbAr;
+              private RadioButton rbEn;
+              private CheckBox cbForce;
+              private CheckBox cbOrganize;
+              private Button btnPerm;
+              private Button btnMovies;
+              private Button btnTv;
+              private Button btnStop;
+              private ProgressBar progressBar;
+              private TextView tvStatus;
+              private TextView tvLog;
+              private ScrollView logScroll;
+
+              private volatile boolean isRunning = false;
+              private volatile boolean stopRequested = false;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  buildUi();
+                  loadPrefs();
+                  updatePermissionButton();
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  updatePermissionButton();
+              }
+
+              private int dp(int v) {
+                  return Math.round(v * getResources().getDisplayMetrics().density);
+              }
+
+              private GradientDrawable roundedBg(String hex, int radiusDp) {
+                  GradientDrawable d = new GradientDrawable();
+                  d.setColor(Color.parseColor(hex));
+                  d.setCornerRadius(dp(radiusDp));
+                  return d;
+              }
+
+              private void buildUi() {
+                  ScrollView rootScroll = new ScrollView(this);
+                  rootScroll.setBackgroundColor(Color.parseColor("#0F172A"));
+                  rootScroll.setFillViewport(true);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(dp(16), dp(20), dp(16), dp(24));
+                  root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+                  rootScroll.addView(root);
+
+                  // Header
+                  TextView title = new TextView(this);
+                  title.setText("🎬 KodiMM Lite");
+                  title.setTextColor(Color.WHITE);
+                  title.setTextSize(24);
+                  title.setTypeface(null, Typeface.BOLD);
+                  root.addView(title);
+
+                  TextView sub = new TextView(this);
+                  sub.setText("بديل خفيف لـ tinyMediaManager — توليد NFO وبوستر ولوجو وخلفيات لـ Kodi");
+                  sub.setTextColor(Color.parseColor("#94A3B8"));
+                  sub.setTextSize(13);
+                  sub.setPadding(0, dp(4), 0, dp(14));
+                  root.addView(sub);
+
+                  // Permission button
+                  btnPerm = makeButton("🔓 منح صلاحية الوصول الكامل للملفات", "#F59E0B");
+                  btnPerm.setOnClickListener(v -> requestStoragePermission());
+                  root.addView(btnPerm);
+
+                  // Settings card
+                  LinearLayout card = new LinearLayout(this);
+                  card.setOrientation(LinearLayout.VERTICAL);
+                  card.setBackground(roundedBg("#1E293B", 12));
+                  card.setPadding(dp(14), dp(14), dp(14), dp(14));
+                  LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  cardLp.setMargins(0, dp(12), 0, dp(12));
+                  card.setLayoutParams(cardLp);
+                  root.addView(card);
+
+                  card.addView(makeLabel("مفتاح TMDB API (v3 المجاني):"));
+                  etApiKey = makeInput("أدخل TMDB API Key هنا...");
+                  card.addView(etApiKey);
+
+                  card.addView(makeLabel("مسار مجلد الأفلام أو المسلسلات:"));
+                  etFolder = makeInput("/storage/emulated/0/Movies");
+                  card.addView(etFolder);
+
+                  card.addView(makeLabel("لغة الوصف والبيانات:"));
+                  RadioGroup rg = new RadioGroup(this);
+                  rg.setOrientation(LinearLayout.HORIZONTAL);
+                  rbAr = new RadioButton(this);
+                  rbAr.setText("العربية (ar-EG)");
+                  rbAr.setTextColor(Color.WHITE);
+                  rbAr.setChecked(true);
+                  rbEn = new RadioButton(this);
+                  rbEn.setText("English (en-US)");
+                  rbEn.setTextColor(Color.WHITE);
+                  rbEn.setPadding(dp(16), 0, 0, 0);
+                  rg.addView(rbAr);
+                  rg.addView(rbEn);
+                  card.addView(rg);
+
+                  cbOrganize = new CheckBox(this);
+                  cbOrganize.setText("تنظيم الأفلام المنفردة داخل مجلدات (اسم الفيلم + السنة) تلقائياً");
+                  cbOrganize.setTextColor(Color.parseColor("#E2E8F0"));
+                  cbOrganize.setChecked(true);
+                  card.addView(cbOrganize);
+
+                  cbForce = new CheckBox(this);
+                  cbForce.setText("إعادة تحميل وتحديث الملفات الموجودة بالفعل");
+                  cbForce.setTextColor(Color.parseColor("#E2E8F0"));
+                  cbForce.setChecked(false);
+                  card.addView(cbForce);
+
+                  // Action buttons
+                  btnMovies = makeButton("🎬 فحص وتجهيز مجلد الأفلام (Movies)", "#E50914");
+                  btnMovies.setOnClickListener(v -> startScrape(true));
+                  root.addView(btnMovies);
+
+                  btnTv = makeButton("📺 فحص وتجهيز مجلد المسلسلات (TV Shows)", "#2563EB");
+                  LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  tvLp.setMargins(0, dp(10), 0, dp(10));
+                  btnTv.setLayoutParams(tvLp);
+                  btnTv.setOnClickListener(v -> startScrape(false));
+                  root.addView(btnTv);
+
+                  btnStop = makeButton("⏹ إيقاف الفحص", "#475569");
+                  btnStop.setEnabled(false);
+                  btnStop.setOnClickListener(v -> {
+                      stopRequested = true;
+                      appendLog("⏳ جاري الإيقاف...");
+                  });
+                  root.addView(btnStop);
+
+                  // Progress + Status
+                  progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+                  progressBar.setMax(100);
+                  progressBar.setProgress(0);
+                  LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT, dp(12));
+                  pbLp.setMargins(0, dp(12), 0, dp(6));
+                  progressBar.setLayoutParams(pbLp);
+                  root.addView(progressBar);
+
+                  tvStatus = new TextView(this);
+                  tvStatus.setText("جاهز للعمل");
+                  tvStatus.setTextColor(Color.parseColor("#38BDF8"));
+                  tvStatus.setTextSize(13);
+                  tvStatus.setPadding(0, 0, 0, dp(8));
+                  root.addView(tvStatus);
+
+                  // Log box
+                  logScroll = new ScrollView(this);
+                  logScroll.setBackground(roundedBg("#020617", 10));
+                  LinearLayout.LayoutParams logLp = new LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT, dp(240));
+                  logScroll.setLayoutParams(logLp);
+                  logScroll.setPadding(dp(10), dp(10), dp(10), dp(10));
+
+                  tvLog = new TextView(this);
+                  tvLog.setTextColor(Color.parseColor("#CBD5E1"));
+                  tvLog.setTextSize(12);
+                  tvLog.setTypeface(Typeface.MONOSPACE);
+                  tvLog.setText("سجل العمليات سيظهر هنا...\n");
+                  logScroll.addView(tvLog);
+                  root.addView(logScroll);
+
+                  setContentView(rootScroll);
+              }
+
+              private TextView makeLabel(String text) {
+                  TextView tv = new TextView(this);
+                  tv.setText(text);
+                  tv.setTextColor(Color.parseColor("#CBD5E1"));
+                  tv.setTextSize(13);
+                  tv.setPadding(0, dp(8), 0, dp(4));
+                  return tv;
+              }
+
+              private EditText makeInput(String hint) {
+                  EditText et = new EditText(this);
+                  et.setHint(hint);
+                  et.setHintTextColor(Color.parseColor("#64748B"));
+                  et.setTextColor(Color.WHITE);
+                  et.setTextSize(14);
+                  et.setSingleLine(true);
+                  et.setBackground(roundedBg("#0F172A", 8));
+                  et.setPadding(dp(12), dp(10), dp(12), dp(10));
+                  return et;
+              }
+
+              private Button makeButton(String text, String colorHex) {
+                  Button b = new Button(this);
+                  b.setText(text);
+                  b.setTextColor(Color.WHITE);
+                  b.setTextSize(15);
+                  b.setAllCaps(false);
+                  b.setBackground(roundedBg(colorHex, 10));
+                  b.setPadding(dp(14), dp(12), dp(14), dp(12));
+                  b.setGravity(Gravity.CENTER);
+                  return b;
+              }
+
+              private void loadPrefs() {
+                  SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+                  etApiKey.setText(sp.getString("api_key", ""));
+                  etFolder.setText(sp.getString("folder", "/storage/emulated/0/Movies"));
+                  String lang = sp.getString("lang", "ar-EG");
+                  if ("en-US".equals(lang)) {
+                      rbEn.setChecked(true);
+                  } else {
+                      rbAr.setChecked(true);
+                  }
+              }
+
+              private void savePrefs() {
+                  getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                      .putString("api_key", etApiKey.getText().toString().trim())
+                      .putString("folder", etFolder.getText().toString().trim())
+                      .putString("lang", rbEn.isChecked() ? "en-US" : "ar-EG")
+                      .apply();
+              }
+
+              private boolean hasStoragePermission() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                      return Environment.isExternalStorageManager();
+                  }
+                  return checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+              }
+
+              private void updatePermissionButton() {
+                  if (hasStoragePermission()) {
+                      btnPerm.setText("✅ صلاحية الوصول للملفات مفعّلة");
+                      btnPerm.setBackground(roundedBg("#16A34A", 10));
+                  } else {
+                      btnPerm.setText("🔓 منح صلاحية الوصول الكامل للملفات (مطلوب)");
+                      btnPerm.setBackground(roundedBg("#D97706", 10));
+                  }
+              }
+
+              private void requestStoragePermission() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                      try {
+                          Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                          intent.setData(Uri.parse("package:" + getPackageName()));
+                          startActivity(intent);
+                      } catch (Exception e) {
+                          startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+                      }
+                  } else {
+                      requestPermissions(new String[]{
+                          Manifest.permission.READ_EXTERNAL_STORAGE,
+                          Manifest.permission.WRITE_EXTERNAL_STORAGE
+                      }, 101);
+                  }
+              }
+
+              private void appendLog(String msg) {
+                  runOnUiThread(() -> {
+                      tvLog.append(msg + "\n");
+                      logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+                  });
+              }
+
+              private void setStatus(String status, int progress) {
+                  runOnUiThread(() -> {
+                      tvStatus.setText(status);
+                      if (progress >= 0) progressBar.setProgress(progress);
+                  });
+              }
+
+              private void setRunningState(boolean running) {
+                  isRunning = running;
+                  runOnUiThread(() -> {
+                      btnMovies.setEnabled(!running);
+                      btnTv.setEnabled(!running);
+                      btnStop.setEnabled(running);
+                  });
+              }
+
+              private void startScrape(boolean isMovies) {
+                  if (isRunning) return;
+                  if (!hasStoragePermission()) {
+                      Toast.makeText(this, "امنح صلاحية الوصول للملفات أولاً", Toast.LENGTH_LONG).show();
+                      requestStoragePermission();
+                      return;
+                  }
+                  String apiKey = etApiKey.getText().toString().trim();
+                  String folderPath = etFolder.getText().toString().trim();
+                  if (apiKey.isEmpty()) {
+                      Toast.makeText(this, "أدخل مفتاح TMDB API أولاً", Toast.LENGTH_LONG).show();
+                      return;
+                  }
+                  File baseDir = new File(folderPath);
+                  if (!baseDir.exists() || !baseDir.isDirectory()) {
+                      Toast.makeText(this, "المسار غير موجود: " + folderPath, Toast.LENGTH_LONG).show();
+                      return;
+                  }
+
+                  savePrefs();
+                  String lang = rbEn.isChecked() ? "en-US" : "ar-EG";
+                  boolean force = cbForce.isChecked();
+                  boolean organize = cbOrganize.isChecked();
+
+                  stopRequested = false;
+                  setRunningState(true);
+                  runOnUiThread(() -> tvLog.setText(""));
+                  setStatus("جاري البدء...", 0);
+
+                  new Thread(() -> {
+                      try {
+                          if (isMovies && organize) {
+                              organizeLooseMovies(baseDir);
+                          }
+                          File[] children = baseDir.listFiles();
+                          List<File> folders = new ArrayList<>();
+                          if (children != null) {
+                              Arrays.sort(children, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+                              for (File f : children) {
+                                  if (f.isDirectory() && !f.getName().startsWith(".")) {
+                                      folders.add(f);
+                                  }
+                              }
+                          }
+                          appendLog("📂 تم العثور على " + folders.size() + " مجلد");
+                          int total = Math.max(1, folders.size());
+                          for (int i = 0; i < folders.size(); i++) {
+                              if (stopRequested) {
+                                  appendLog("⏹ تم إيقاف الفحص بواسطة المستخدم.");
+                                  break;
+                              }
+                              File f = folders.get(i);
+                              int pct = (int) (((i + 1) * 100.0) / total);
+                              setStatus((i + 1) + " / " + folders.size() + " : " + f.getName(), pct);
+                              try {
+                                  if (isMovies) {
+                                      scrapeMovieFolder(f, apiKey, lang, force);
+                                  } else {
+                                      scrapeTvFolder(f, apiKey, lang, force);
+                                  }
+                              } catch (Exception e) {
+                                  appendLog("  [!] خطأ في " + f.getName() + ": " + e.getMessage());
+                              }
+                          }
+                          if (!stopRequested) {
+                              setStatus("✅ انتهى الفحص بنجاح!", 100);
+                              appendLog("\n✅ اكتملت العملية بنجاح!");
+                          } else {
+                              setStatus("تم الإيقاف", -1);
+                          }
+                      } finally {
+                          setRunningState(false);
+                      }
+                  }).start();
+              }
+
+              private boolean isVideoFile(File f) {
+                  if (!f.isFile()) return false;
+                  String name = f.getName().toLowerCase(Locale.US);
+                  int dot = name.lastIndexOf('.');
+                  return dot >= 0 && VIDEO_EXTS.contains(name.substring(dot));
+              }
+
+              private String stripExtension(String name) {
+                  int dot = name.lastIndexOf('.');
+                  return dot > 0 ? name.substring(0, dot) : name;
+              }
+
+              private String[] cleanNameAndYear(String raw) {
+                  String name = raw;
+                  String year = null;
+                  Matcher m = YEAR_PATTERN.matcher(name);
+                  if (m.find()) {
+                      year = m.group(1);
+                      name = name.substring(0, m.start());
+                  }
+                  name = name.replace('.', ' ').replace('_', ' ').replace('-', ' ');
+                  name = JUNK_PATTERN.matcher(name).replaceAll(" ");
+                  name = name.replaceAll("\\s+", " ").trim();
+                  name = name.replaceAll("^[\\(\\[\\s]+|[\\)\\]\\s]+$", "");
+                  return new String[]{name, year};
+              }
+
+              private void organizeLooseMovies(File baseDir) {
+                  File[] items = baseDir.listFiles();
+                  if (items == null) return;
+                  for (File item : items) {
+                      if (isVideoFile(item)) {
+                          String stem = stripExtension(item.getName());
+                          String[] ny = cleanNameAndYear(stem);
+                          String folderName = (ny[1] != null) ? (ny[0] + " (" + ny[1] + ")") : ny[0];
+                          if (folderName.isEmpty()) folderName = stem;
+                          File targetDir = new File(baseDir, folderName);
+                          if (!targetDir.exists()) targetDir.mkdirs();
+                          if (item.renameTo(new File(targetDir, item.getName()))) {
+                              appendLog("📁 تنظيم: " + item.getName() + " -> " + folderName + "/");
+                              for (File sub : items) {
+                                  if (sub.isFile() && sub.getName().startsWith(stem) && sub.getName().toLowerCase(Locale.US).endsWith(".srt")) {
+                                      sub.renameTo(new File(targetDir, sub.getName()));
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+
+              private JSONObject tmdbGet(String endpoint, String apiKey, String extraQuery) throws Exception {
+                  String urlStr = TMDB_API + endpoint + "?api_key=" + URLEncoder.encode(apiKey, "UTF-8")
+                      + (extraQuery != null && !extraQuery.isEmpty() ? "&" + extraQuery : "");
+                  HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+                  conn.setConnectTimeout(15000);
+                  conn.setReadTimeout(20000);
+                  conn.setRequestMethod("GET");
+                  int code = conn.getResponseCode();
+                  if (code != 200) throw new Exception("HTTP " + code);
+                  try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                      StringBuilder sb = new StringBuilder();
+                      String line;
+                      while ((line = br.readLine()) != null) sb.append(line);
+                      return new JSONObject(sb.toString());
+                  } finally {
+                      conn.disconnect();
+                  }
+              }
+
+              private boolean downloadFile(String urlStr, File dest) {
+                  try {
+                      HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+                      conn.setConnectTimeout(15000);
+                      conn.setReadTimeout(30000);
+                      if (conn.getResponseCode() != 200) return false;
+                      try (InputStream in = conn.getInputStream(); FileOutputStream out = new FileOutputStream(dest)) {
+                          byte[] buf = new byte[32768];
+                          int n;
+                          while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                      } finally {
+                          conn.disconnect();
+                      }
+                      return true;
+                  } catch (Exception e) {
+                      appendLog("    [!] فشل تحميل " + dest.getName());
+                      return false;
+                  }
+              }
+
+              private String pickBestLogo(JSONObject images, String langShort) {
+                  JSONArray logos = images.optJSONArray("logos");
+                  if (logos == null || logos.length() == 0) return null;
+                  String best = null;
+                  double bestScore = -1;
+                  for (int i = 0; i < logos.length(); i++) {
+                      JSONObject l = logos.optJSONObject(i);
+                      if (l == null) continue;
+                      String fp = l.optString("file_path", "");
+                      if (fp.isEmpty()) continue;
+                      String iso = l.optString("iso_639_1", "");
+                      double score = l.optDouble("vote_average", 0) * 10 + l.optInt("width", 0) / 1000.0;
+                      if ("en".equals(iso)) score += 100;
+                      else if (langShort.equals(iso)) score += 80;
+                      if (score > bestScore) {
+                          bestScore = score;
+                          best = fp;
+                      }
+                  }
+                  return best;
+              }
+
+              private String esc(String s) {
+                  if (s == null) return "";
+                  return s.replace("&", "&amp;")
+                          .replace("<", "&lt;")
+                          .replace(">", "&gt;")
+                          .replace("\"", "&quot;")
+                          .replace("'", "&apos;");
+              }
+
+              private void writeText(File dest, String content) throws Exception {
+                  try (FileOutputStream out = new FileOutputStream(dest)) {
+                      out.write(content.getBytes(StandardCharsets.UTF_8));
+                  }
+              }
+
+              private void scrapeMovieFolder(File folder, String apiKey, String lang, boolean force) throws Exception {
+                  File[] files = folder.listFiles();
+                  if (files == null) return;
+                  File mainVideo = null;
+                  for (File f : files) {
+                      if (isVideoFile(f)) {
+                          if (mainVideo == null || f.length() > mainVideo.length()) mainVideo = f;
+                      }
+                  }
+                  if (mainVideo == null) return;
+
+                  File nfo = new File(folder, "movie.nfo");
+                  File poster = new File(folder, "poster.jpg");
+                  File fanart = new File(folder, "fanart.jpg");
+                  File logo = new File(folder, "clearlogo.png");
+
+                  if (!force && nfo.exists() && poster.exists() && logo.exists()) {
+                      appendLog("  [تخطي - مكتمل] " + folder.getName());
+                      return;
+                  }
+
+                  String[] ny = cleanNameAndYear(folder.getName());
+                  if (ny[0].isEmpty()) ny = cleanNameAndYear(stripExtension(mainVideo.getName()));
+                  String title = ny[0];
+                  String year = ny[1];
+
+                  appendLog("🔍 فيلم: " + title + (year != null ? " (" + year + ")" : ""));
+                  String q = "query=" + URLEncoder.encode(title, "UTF-8") + "&language=" + lang
+                      + (year != null ? "&year=" + year : "");
+                  JSONArray results = tmdbGet("/search/movie", apiKey, q).optJSONArray("results");
+                  if ((results == null || results.length() == 0) && year != null) {
+                      q = "query=" + URLEncoder.encode(title, "UTF-8") + "&language=" + lang;
+                      results = tmdbGet("/search/movie", apiKey, q).optJSONArray("results");
+                  }
+                  if (results == null || results.length() == 0) {
+                      appendLog("  [!] لا توجد نتيجة لـ: " + title);
+                      return;
+                  }
+
+                  int id = results.getJSONObject(0).getInt("id");
+                  JSONObject d = tmdbGet("/movie/" + id, apiKey, "language=" + lang);
+                  if (d.optString("overview", "").isEmpty() && !lang.startsWith("en")) {
+                      JSONObject en = tmdbGet("/movie/" + id, apiKey, "language=en-US");
+                      d.put("overview", en.optString("overview", ""));
+                      if (d.optString("tagline", "").isEmpty()) d.put("tagline", en.optString("tagline", ""));
+                  }
+                  JSONObject credits = tmdbGet("/movie/" + id + "/credits", apiKey, "");
+                  String langShort = lang.split("-")[0];
+                  JSONObject images = tmdbGet("/movie/" + id + "/images", apiKey, "include_image_language=en," + langShort + ",null");
+
+                  StringBuilder xml = new StringBuilder();
+                  xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<movie>\n");
+                  xml.append("  <title>").append(esc(d.optString("title"))).append("</title>\n");
+                  xml.append("  <originaltitle>").append(esc(d.optString("original_title"))).append("</originaltitle>\n");
+                  xml.append("  <tagline>").append(esc(d.optString("tagline"))).append("</tagline>\n");
+                  xml.append("  <plot>").append(esc(d.optString("overview"))).append("</plot>\n");
+                  xml.append("  <outline>").append(esc(d.optString("overview"))).append("</outline>\n");
+                  if (d.optInt("runtime") > 0) xml.append("  <runtime>").append(d.optInt("runtime")).append("</runtime>\n");
+                  String rel = d.optString("release_date", "");
+                  if (!rel.isEmpty()) {
+                      xml.append("  <premiered>").append(esc(rel)).append("</premiered>\n");
+                      if (rel.length() >= 4) xml.append("  <year>").append(esc(rel.substring(0, 4))).append("</year>\n");
+                  }
+                  double vote = d.optDouble("vote_average", 0);
+                  if (vote > 0) {
+                      xml.append(String.format(Locale.US, "  <rating>%.1f</rating>\n", vote));
+                  }
+                  xml.append("  <uniqueid type=\"tmdb\" default=\"true\">").append(id).append("</uniqueid>\n");
+                  if (!d.optString("imdb_id", "").isEmpty()) {
+                      xml.append("  <uniqueid type=\"imdb\">").append(esc(d.optString("imdb_id"))).append("</uniqueid>\n");
+                  }
+                  JSONArray genres = d.optJSONArray("genres");
+                  if (genres != null) {
+                      for (int i = 0; i < genres.length(); i++) {
+                          xml.append("  <genre>").append(esc(genres.getJSONObject(i).optString("name"))).append("</genre>\n");
+                      }
+                  }
+                  JSONArray crew = credits.optJSONArray("crew");
+                  if (crew != null) {
+                      for (int i = 0; i < crew.length(); i++) {
+                          JSONObject c = crew.getJSONObject(i);
+                          if ("Director".equals(c.optString("job"))) {
+                              xml.append("  <director>").append(esc(c.optString("name"))).append("</director>\n");
+                          }
+                      }
+                  }
+                  JSONArray cast = credits.optJSONArray("cast");
+                  if (cast != null) {
+                      for (int i = 0; i < Math.min(12, cast.length()); i++) {
+                          JSONObject a = cast.getJSONObject(i);
+                          xml.append("  <actor><name>").append(esc(a.optString("name")))
+                             .append("</name><role>").append(esc(a.optString("character")))
+                             .append("</role><order>").append(i).append("</order>");
+                          String pp = a.optString("profile_path", "");
+                          if (!pp.isEmpty()) xml.append("<thumb>").append(TMDB_IMG).append("/w500").append(pp).append("</thumb>");
+                          xml.append("</actor>\n");
+                      }
+                  }
+                  xml.append("</movie>\n");
+                  writeText(nfo, xml.toString());
+                  appendLog("  ✓ movie.nfo");
+
+                  String pp = d.optString("poster_path", "");
+                  if ((force || !poster.exists()) && !pp.isEmpty() && downloadFile(TMDB_IMG + "/w780" + pp, poster)) {
+                      appendLog("  ✓ poster.jpg");
+                  }
+                  String bp = d.optString("backdrop_path", "");
+                  if ((force || !fanart.exists()) && !bp.isEmpty() && downloadFile(TMDB_IMG + "/w1280" + bp, fanart)) {
+                      appendLog("  ✓ fanart.jpg");
+                  }
+                  String lp = pickBestLogo(images, langShort);
+                  if ((force || !logo.exists()) && lp != null && downloadFile(TMDB_IMG + "/original" + lp, logo)) {
+                      appendLog("  ✓ clearlogo.png");
+                  }
+              }
+
+              private void scrapeTvFolder(File folder, String apiKey, String lang, boolean force) throws Exception {
+                  String[] ny = cleanNameAndYear(folder.getName());
+                  String title = ny[0];
+                  String year = ny[1];
+                  appendLog("🔍 مسلسل: " + title + (year != null ? " (" + year + ")" : ""));
+
+                  String q = "query=" + URLEncoder.encode(title, "UTF-8") + "&language=" + lang
+                      + (year != null ? "&first_air_date_year=" + year : "");
+                  JSONArray results = tmdbGet("/search/tv", apiKey, q).optJSONArray("results");
+                  if ((results == null || results.length() == 0) && year != null) {
+                      q = "query=" + URLEncoder.encode(title, "UTF-8") + "&language=" + lang;
+                      results = tmdbGet("/search/tv", apiKey, q).optJSONArray("results");
+                  }
+                  if (results == null || results.length() == 0) {
+                      appendLog("  [!] لا توجد نتيجة للمسلسل: " + title);
+                      return;
+                  }
+
+                  int tvId = results.getJSONObject(0).getInt("id");
+                  JSONObject d = tmdbGet("/tv/" + tvId, apiKey, "language=" + lang);
+                  if (d.optString("overview", "").isEmpty() && !lang.startsWith("en")) {
+                      JSONObject en = tmdbGet("/tv/" + tvId, apiKey, "language=en-US");
+                      d.put("overview", en.optString("overview", ""));
+                  }
+                  String langShort = lang.split("-")[0];
+                  JSONObject images = tmdbGet("/tv/" + tvId + "/images", apiKey, "include_image_language=en," + langShort + ",null");
+
+                  File nfo = new File(folder, "tvshow.nfo");
+                  File poster = new File(folder, "poster.jpg");
+                  File fanart = new File(folder, "fanart.jpg");
+                  File logo = new File(folder, "clearlogo.png");
+
+                  if (force || !nfo.exists()) {
+                      StringBuilder xml = new StringBuilder();
+                      xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<tvshow>\n");
+                      xml.append("  <title>").append(esc(d.optString("name"))).append("</title>\n");
+                      xml.append("  <originaltitle>").append(esc(d.optString("original_name"))).append("</originaltitle>\n");
+                      xml.append("  <plot>").append(esc(d.optString("overview"))).append("</plot>\n");
+                      String fa = d.optString("first_air_date", "");
+                      if (!fa.isEmpty()) {
+                          xml.append("  <premiered>").append(esc(fa)).append("</premiered>\n");
+                          if (fa.length() >= 4) xml.append("  <year>").append(esc(fa.substring(0, 4))).append("</year>\n");
+                      }
+                      xml.append("  <uniqueid type=\"tmdb\" default=\"true\">").append(tvId).append("</uniqueid>\n");
+                      JSONArray genres = d.optJSONArray("genres");
+                      if (genres != null) {
+                          for (int i = 0; i < genres.length(); i++) {
+                              xml.append("  <genre>").append(esc(genres.getJSONObject(i).optString("name"))).append("</genre>\n");
+                          }
+                      }
+                      xml.append("</tvshow>\n");
+                      writeText(nfo, xml.toString());
+                      appendLog("  ✓ tvshow.nfo");
+                  }
+
+                  String pp = d.optString("poster_path", "");
+                  if ((force || !poster.exists()) && !pp.isEmpty() && downloadFile(TMDB_IMG + "/w780" + pp, poster)) {
+                      appendLog("  ✓ poster.jpg");
+                  }
+                  String bp = d.optString("backdrop_path", "");
+                  if ((force || !fanart.exists()) && !bp.isEmpty() && downloadFile(TMDB_IMG + "/w1280" + bp, fanart)) {
+                      appendLog("  ✓ fanart.jpg");
+                  }
+                  String lp = pickBestLogo(images, langShort);
+                  if ((force || !logo.exists()) && lp != null && downloadFile(TMDB_IMG + "/original" + lp, logo)) {
+                      appendLog("  ✓ clearlogo.png");
+                  }
+
+                  Map<Integer, JSONArray> seasonCache = new HashMap<>();
+                  List<File> videos = new ArrayList<>();
+                  collectVideos(folder, videos);
+                  for (File vid : videos) {
+                      if (stopRequested) break;
+                      String stem = stripExtension(vid.getName());
+                      File epNfo = new File(vid.getParentFile(), stem + ".nfo");
+                      if (!force && epNfo.exists()) continue;
+                      Matcher m = EPISODE_PATTERN.matcher(stem);
+                      if (!m.find()) continue;
+                      int sNum = Integer.parseInt(m.group(1) != null ? m.group(1) : m.group(3));
+                      int eNum = Integer.parseInt(m.group(2) != null ? m.group(2) : m.group(4));
+                      if (!seasonCache.containsKey(sNum)) {
+                          try {
+                              JSONObject sObj = tmdbGet("/tv/" + tvId + "/season/" + sNum, apiKey, "language=" + lang);
+                              seasonCache.put(sNum, sObj.optJSONArray("episodes"));
+                          } catch (Exception e) {
+                              seasonCache.put(sNum, null);
+                          }
+                      }
+                      JSONArray eps = seasonCache.get(sNum);
+                      if (eps != null) {
+                          for (int i = 0; i < eps.length(); i++) {
+                              JSONObject ep = eps.getJSONObject(i);
+                              if (ep.optInt("episode_number") == eNum) {
+                                  StringBuilder ex = new StringBuilder();
+                                  ex.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<episodedetails>\n");
+                                  ex.append("  <title>").append(esc(ep.optString("name"))).append("</title>\n");
+                                  ex.append("  <season>").append(sNum).append("</season>\n");
+                                  ex.append("  <episode>").append(eNum).append("</episode>\n");
+                                  ex.append("  <plot>").append(esc(ep.optString("overview"))).append("</plot>\n");
+                                  ex.append("  <aired>").append(esc(ep.optString("air_date"))).append("</aired>\n");
+                                  ex.append("</episodedetails>\n");
+                                  writeText(epNfo, ex.toString());
+                                  appendLog(String.format(Locale.US, "  ✓ S%02dE%02d.nfo", sNum, eNum));
+                                  break;
+                              }
+                          }
+                      }
+                  }
+              }
+
+              private void collectVideos(File dir, List<File> out) {
+                  File[] list = dir.listFiles();
+                  if (list == null) return;
+                  for (File f : list) {
+                      if (f.isDirectory()) collectVideos(f, out);
+                      else if (isVideoFile(f)) out.add(f);
+                  }
+              }
+          }
+          EOF
+
+      - name: Build KodiMM Lite APK
+        run: |
+          gradle assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk KodiMM-Lite.apk
+          ls -lh KodiMM-Lite.apk
+
+      - name: Upload KodiMM-Lite.apk artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KodiMM-Lite-APK
+          path: KodiMM-Lite.apk
+          retention-days: 30
