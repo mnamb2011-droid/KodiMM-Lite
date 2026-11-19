@@ -1,0 +1,3024 @@
+name: Build KodiMM Ultimate v5.0 Arabic Android GUI (.apk)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Generate KodiMM Ultimate v5.0 Arabic Android project
+        run: |
+          mkdir -p app/src/main/java/com/kodimm/lite app/src/main/res/drawable
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "KodiMMUltimate"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=false
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.kodimm.lite'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.kodimm.lite'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 5
+                  versionName '5.0'
+              }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:fillColor="#070B14" android:pathData="M0,0h108v108h-108z" />
+              <path android:fillColor="#E50914" android:pathData="M16,16 L92,16 L92,92 L16,92 Z" android:fillAlpha="0.20" />
+              <path android:fillColor="#E50914" android:pathData="M36,26 L82,54 L36,82 Z" />
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="KodiMM Ultimate"
+                  android:requestLegacyExternalStorage="true"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="stateHidden|adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/kodimm/lite/LocalStreamServer.java
+          package com.kodimm.lite;
+
+          import java.io.BufferedReader;
+          import java.io.File;
+          import java.io.InputStreamReader;
+          import java.io.OutputStream;
+          import java.io.RandomAccessFile;
+          import java.net.Inet4Address;
+          import java.net.InetAddress;
+          import java.net.NetworkInterface;
+          import java.net.ServerSocket;
+          import java.net.Socket;
+          import java.net.URLDecoder;
+          import java.net.URLEncoder;
+          import java.nio.charset.StandardCharsets;
+          import java.util.Enumeration;
+          import java.util.List;
+          import java.util.Locale;
+
+          public class LocalStreamServer {
+
+              private ServerSocket serverSocket;
+              private volatile boolean running = false;
+              private File moviesRoot;
+              private File tvRoot;
+              private int port = 8080;
+
+              public boolean isRunning() {
+                  return running;
+              }
+
+              public int getPort() {
+                  return port;
+              }
+
+              public static String getLocalIp() {
+                  try {
+                      Enumeration<NetworkInterface> ifaces = NetworkInterface.getNetworkInterfaces();
+                      while (ifaces.hasMoreElements()) {
+                          NetworkInterface ni = ifaces.nextElement();
+                          if (!ni.isUp() || ni.isLoopback()) continue;
+                          Enumeration<InetAddress> addrs = ni.getInetAddresses();
+                          while (addrs.hasMoreElements()) {
+                              InetAddress a = addrs.nextElement();
+                              if (a instanceof Inet4Address && !a.isLoopbackAddress()) {
+                                  return a.getHostAddress();
+                              }
+                          }
+                      }
+                  } catch (Exception ignored) {}
+                  return "127.0.0.1";
+              }
+
+              public void start(File moviesDir, File tvDir, int listenPort) throws Exception {
+                  stop();
+                  this.moviesRoot = moviesDir;
+                  this.tvRoot = tvDir;
+                  this.port = listenPort;
+                  this.serverSocket = new ServerSocket(port);
+                  this.running = true;
+
+                  new Thread(() -> {
+                      while (running) {
+                          try {
+                              Socket client = serverSocket.accept();
+                              new Thread(() -> handleClient(client)).start();
+                          } catch (Exception e) {
+                              if (!running) break;
+                          }
+                      }
+                  }).start();
+              }
+
+              public void stop() {
+                  running = false;
+                  try {
+                      if (serverSocket != null) serverSocket.close();
+                  } catch (Exception ignored) {}
+                  serverSocket = null;
+              }
+
+              private void handleClient(Socket socket) {
+                  try (Socket s = socket;
+                       BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+                       OutputStream out = s.getOutputStream()) {
+
+                      String reqLine = in.readLine();
+                      if (reqLine == null || reqLine.isEmpty()) return;
+                      String[] parts = reqLine.split(" ");
+                      if (parts.length < 2) return;
+                      String rawPath = parts[1];
+                      int qIdx = rawPath.indexOf('?');
+                      if (qIdx >= 0) rawPath = rawPath.substring(0, qIdx);
+                      String path = URLDecoder.decode(rawPath, "UTF-8");
+
+                      String rangeHeader = null;
+                      String line;
+                      while ((line = in.readLine()) != null && !line.isEmpty()) {
+                          if (line.toLowerCase(Locale.US).startsWith("range:")) {
+                              rangeHeader = line.substring(6).trim();
+                          }
+                      }
+
+                      if (path.equals("/") || path.equals("/index.html")) {
+                          sendHtml(out, buildHomeHtml());
+                          return;
+                      }
+
+                      File target = null;
+                      if (path.startsWith("/movies/") && moviesRoot != null) {
+                          target = safeResolve(moviesRoot, path.substring("/movies/".length()));
+                      } else if (path.startsWith("/tv/") && tvRoot != null) {
+                          target = safeResolve(tvRoot, path.substring("/tv/".length()));
+                      } else if (path.equals("/movies") && moviesRoot != null) {
+                          target = moviesRoot;
+                      } else if (path.equals("/tv") && tvRoot != null) {
+                          target = tvRoot;
+                      }
+
+                      if (target == null || !target.exists()) {
+                          sendStatus(out, "404 Not Found", "Not Found");
+                          return;
+                      }
+
+                      if (target.isDirectory()) {
+                          String prefix = path.endsWith("/") ? path : (path + "/");
+                          sendHtml(out, buildDirectoryListing(target, prefix));
+                      } else {
+                          sendFile(out, target, rangeHeader);
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private File safeResolve(File root, String rel) throws Exception {
+                  File f = new File(root, rel).getCanonicalFile();
+                  String rootCanon = root.getCanonicalPath();
+                  if (!f.getPath().startsWith(rootCanon)) return null;
+                  return f;
+              }
+
+              private String buildHomeHtml() {
+                  StringBuilder sb = new StringBuilder();
+                  sb.append("<!DOCTYPE html><html lang=\"ar\" dir=\"rtl\"><head><meta charset=\"UTF-8\">")
+                    .append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
+                    .append("<title>KodiMM Ultimate Stream</title>")
+                    .append("<style>body{background:#070B14;color:#F8FAFC;font-family:sans-serif;margin:0;padding:18px}")
+                    .append("h1{color:#E50914;margin:0 0 8px}a{color:#38BDF8;text-decoration:none}")
+                    .append(".bar{display:flex;gap:10px;margin:10px 0 18px}.btn{background:#1E293B;padding:8px 14px;border-radius:8px;color:#fff}")
+                    .append(".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}")
+                    .append(".card{background:#131B2E;border:1px solid #1E293B;border-radius:12px;overflow:hidden;display:block}")
+                    .append(".card img{width:100%;height:230px;object-fit:cover;display:block;background:#090D16}")
+                    .append(".info{padding:8px}.t{font-weight:bold;font-size:13px;color:#fff}.m{font-size:11px;color:#94A3B8;margin-top:4px}")
+                    .append("</style></head><body><h1>🎬 KodiMM Ultimate — البث المباشر</h1>")
+                    .append("<div class=\"bar\"><a class=\"btn\" href=\"/movies/\">📂 دليل الأفلام لـ Kodi</a>")
+                    .append("<a class=\"btn\" href=\"/tv/\">📺 دليل المسلسلات لـ Kodi</a></div><div class=\"grid\">");
+
+                  if (moviesRoot != null && moviesRoot.exists()) {
+                      List<MediaHelper.MediaItem> movies = MediaHelper.scanLibrary(moviesRoot, true);
+                      for (MediaHelper.MediaItem m : movies) {
+                          if (m.mainVideo == null) continue;
+                          try {
+                              String fEnc = URLEncoder.encode(m.folder.getName(), "UTF-8").replace("+", "%20");
+                              String vEnc = URLEncoder.encode(m.mainVideo.getName(), "UTF-8").replace("+", "%20");
+                              sb.append("<a class=\"card\" href=\"/movies/").append(fEnc).append("/").append(vEnc).append("\">");
+                              if (m.hasPoster) sb.append("<img src=\"/movies/").append(fEnc).append("/poster.jpg\" loading=\"lazy\">");
+                              sb.append("<div class=\"info\"><div class=\"t\">").append(MediaHelper.esc(m.displayTitle)).append("</div>")
+                                .append("<div class=\"m\">").append(MediaHelper.esc(m.year))
+                                .append(m.rating.isEmpty() ? "" : " • ★ " + MediaHelper.esc(m.rating))
+                                .append("</div></div></a>");
+                          } catch (Exception ignored) {}
+                      }
+                  }
+                  sb.append("</div></body></html>");
+                  return sb.toString();
+              }
+
+              private String buildDirectoryListing(File dir, String urlPrefix) {
+                  StringBuilder sb = new StringBuilder();
+                  sb.append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Index of ").append(MediaHelper.esc(urlPrefix)).append("</title></head><body>");
+                  sb.append("<h1>Index of ").append(MediaHelper.esc(urlPrefix)).append("</h1><pre>");
+                  File[] list = dir.listFiles();
+                  if (list != null) {
+                      for (File f : list) {
+                          try {
+                              String enc = URLEncoder.encode(f.getName(), "UTF-8").replace("+", "%20");
+                              String slash = f.isDirectory() ? "/" : "";
+                              sb.append("<a href=\"").append(urlPrefix).append(enc).append(slash).append("\">")
+                                .append(MediaHelper.esc(f.getName())).append(slash).append("</a>\n");
+                          } catch (Exception ignored) {}
+                      }
+                  }
+                  sb.append("</pre></body></html>");
+                  return sb.toString();
+              }
+
+              private String guessMime(String name) {
+                  String n = name.toLowerCase(Locale.US);
+                  if (n.endsWith(".mp4") || n.endsWith(".m4v")) return "video/mp4";
+                  if (n.endsWith(".mkv")) return "video/x-matroska";
+                  if (n.endsWith(".avi")) return "video/x-msvideo";
+                  if (n.endsWith(".webm")) return "video/webm";
+                  if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return "image/jpeg";
+                  if (n.endsWith(".png")) return "image/png";
+                  if (n.endsWith(".nfo") || n.endsWith(".xml")) return "application/xml; charset=utf-8";
+                  if (n.endsWith(".srt")) return "text/plain; charset=utf-8";
+                  return "application/octet-stream";
+              }
+
+              private void sendFile(OutputStream out, File file, String rangeHeader) throws Exception {
+                  long len = file.length();
+                  long start = 0, end = len - 1;
+                  boolean partial = false;
+                  if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                      String[] r = rangeHeader.substring(6).split("-");
+                      if (!r[0].isEmpty()) start = Long.parseLong(r[0]);
+                      if (r.length > 1 && !r[1].isEmpty()) end = Long.parseLong(r[1]);
+                      if (end >= len) end = len - 1;
+                      partial = true;
+                  }
+                  long contentLen = (end - start) + 1;
+                  StringBuilder hdr = new StringBuilder();
+                  hdr.append(partial ? "HTTP/1.1 206 Partial Content\r\n" : "HTTP/1.1 200 OK\r\n");
+                  hdr.append("Content-Type: ").append(guessMime(file.getName())).append("\r\n");
+                  hdr.append("Accept-Ranges: bytes\r\n");
+                  hdr.append("Content-Length: ").append(contentLen).append("\r\n");
+                  if (partial) hdr.append("Content-Range: bytes ").append(start).append("-").append(end).append("/").append(len).append("\r\n");
+                  hdr.append("Connection: close\r\n\r\n");
+                  out.write(hdr.toString().getBytes(StandardCharsets.UTF_8));
+
+                  try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
+                      raf.seek(start);
+                      byte[] buf = new byte[65536];
+                      long remaining = contentLen;
+                      while (remaining > 0) {
+                          int n = raf.read(buf, 0, (int) Math.min(buf.length, remaining));
+                          if (n <= 0) break;
+                          out.write(buf, 0, n);
+                          remaining -= n;
+                      }
+                  }
+                  out.flush();
+              }
+
+              private void sendHtml(OutputStream out, String html) throws Exception {
+                  byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+                  String hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + bytes.length + "\r\nConnection: close\r\n\r\n";
+                  out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                  out.write(bytes);
+                  out.flush();
+              }
+
+              private void sendStatus(OutputStream out, String status, String body) throws Exception {
+                  byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+                  String hdr = "HTTP/1.1 " + status + "\r\nContent-Type: text/plain\r\nContent-Length: " + bytes.length + "\r\nConnection: close\r\n\r\n";
+                  out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                  out.write(bytes);
+                  out.flush();
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/kodimm/lite/MediaHelper.java
+          package com.kodimm.lite;
+
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          import java.io.BufferedReader;
+          import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.FileOutputStream;
+          import java.io.InputStream;
+          import java.io.InputStreamReader;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.net.URLEncoder;
+          import java.nio.charset.StandardCharsets;
+          import java.util.ArrayList;
+          import java.util.Arrays;
+          import java.util.HashMap;
+          import java.util.HashSet;
+          import java.util.List;
+          import java.util.Locale;
+          import java.util.Map;
+          import java.util.Set;
+          import java.util.regex.Matcher;
+          import java.util.regex.Pattern;
+
+          public class MediaHelper {
+
+              public static final String DEFAULT_TMDB_KEY = "fdf6b54f7a4ded2dba55962e6a12c75e";
+              public static final String TMDB_API = "https://api.themoviedb.org/3";
+              public static final String TMDB_IMG = "https://image.tmdb.org/t/p";
+
+              public static final Set<String> VIDEO_EXTS = new HashSet<>(Arrays.asList(
+                  ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".ts", ".wmv", ".flv", ".webm"
+              ));
+
+              private static final Pattern YEAR_PATTERN = Pattern.compile("[\\(\\[\\.\\s_-]((?:19|20)\\d{2})[\\)\\]\\.\\s_-]?");
+              private static final Pattern JUNK_PATTERN = Pattern.compile(
+                  "(?i)\\b(480p|720p|1080p|2160p|4k|uhd|hdr|hdr10|dv|web[-.\\s]?dl|webrip|bluray|bdrip|" +
+                  "brrip|dvdrip|hdrip|hdtv|x264|x265|h264|h265|hevc|av1|aac|ac3|dts|atmos|5\\.1|7\\.1|" +
+                  "10bit|8bit|remux|yify|yts|rarbg|extended|unrated|proper|repack|subbed|dubbed|arabic|multi)\\b"
+              );
+              public static final Pattern EPISODE_PATTERN = Pattern.compile("[Ss](\\d{1,2})[Ee](\\d{1,3})|(\\d{1,2})x(\\d{1,3})");
+
+              public interface Logger {
+                  void log(String msg);
+              }
+
+              public static class ScrapeOptions {
+                  public String apiKey = DEFAULT_TMDB_KEY;
+                  public String lang = "ar-EG";
+                  public String posterSize = "w780";
+                  public String fanartSize = "w1280";
+                  public boolean dlPoster = true;
+                  public boolean dlFanart = true;
+                  public boolean dlLogo = true;
+                  public boolean dlLandscape = true;
+                  public boolean dlSeasonPosters = true;
+                  public boolean dlEpisodeThumbs = false;
+                  public boolean force = false;
+                  public boolean autoRename = false;
+              }
+
+              public static class MediaItem {
+                  public File folder;
+                  public File mainVideo;
+                  public boolean isMovie;
+                  public boolean hasNfo;
+                  public boolean hasPoster;
+                  public boolean hasFanart;
+                  public boolean hasLogo;
+                  public boolean hasLandscape;
+                  public boolean hasSrt;
+                  public int episodeCount;
+                  public int missingEpNfo;
+                  public long sizeBytes;
+                  public String displayTitle = "";
+                  public String originalTitle = "";
+                  public String year = "";
+                  public String rating = "";
+                  public String runtime = "";
+                  public String genres = "";
+                  public List<String> genreList = new ArrayList<>();
+                  public String director = "";
+                  public String collection = "";
+                  public String plot = "";
+                  public String actorsSummary = "";
+                  public String tmdbId = "";
+
+                  public boolean isComplete() {
+                      return hasNfo && hasPoster && hasLogo && (isMovie || missingEpNfo == 0);
+                  }
+
+                  public double ratingValue() {
+                      try { return Double.parseDouble(rating); } catch (Exception e) { return 0.0; }
+                  }
+
+                  public int yearValue() {
+                      try { return Integer.parseInt(year); } catch (Exception e) { return 0; }
+                  }
+
+                  public int runtimeMinutes() {
+                      try { return Integer.parseInt(runtime); } catch (Exception e) { return 0; }
+                  }
+              }
+
+              public static boolean isVideoFile(File f) {
+                  if (f == null || !f.isFile()) return false;
+                  String name = f.getName().toLowerCase(Locale.US);
+                  int dot = name.lastIndexOf('.');
+                  return dot >= 0 && VIDEO_EXTS.contains(name.substring(dot));
+              }
+
+              public static String stripExt(String name) {
+                  int dot = name.lastIndexOf('.');
+                  return dot > 0 ? name.substring(0, dot) : name;
+              }
+
+              public static String sanitizeFilename(String s) {
+                  if (s == null) return "";
+                  return s.replaceAll("[\\\\/:*?\"<>|]", " ").replaceAll("\\s+", " ").trim();
+              }
+
+              public static String[] cleanNameAndYear(String raw) {
+                  String name = raw == null ? "" : raw;
+                  String year = null;
+                  Matcher m = YEAR_PATTERN.matcher(name);
+                  if (m.find()) {
+                      year = m.group(1);
+                      name = name.substring(0, m.start());
+                  }
+                  name = name.replace('.', ' ').replace('_', ' ').replace('-', ' ');
+                  name = JUNK_PATTERN.matcher(name).replaceAll(" ");
+                  name = name.replaceAll("\\s+", " ").trim();
+                  name = name.replaceAll("^[\\(\\[\\s]+|[\\)\\]\\s]+$", "");
+                  return new String[]{name, year};
+              }
+
+              public static String formatSize(long bytes) {
+                  if (bytes >= 1073741824L) return String.format(Locale.US, "%.2f GB", bytes / 1073741824.0);
+                  if (bytes >= 1048576L) return String.format(Locale.US, "%.0f MB", bytes / 1048576.0);
+                  return (bytes / 1024L) + " KB";
+              }
+
+              public static String extractXmlTag(String xml, String tag) {
+                  if (xml == null) return "";
+                  Pattern p = Pattern.compile("<" + tag + "(?:\\s+[^>]*)?>(.*?)</" + tag + ">", Pattern.DOTALL);
+                  Matcher m = p.matcher(xml);
+                  return m.find() ? unesc(m.group(1)).trim() : "";
+              }
+
+              public static List<String> extractXmlTagList(String xml, String tag) {
+                  List<String> out = new ArrayList<>();
+                  if (xml == null) return out;
+                  Pattern p = Pattern.compile("<" + tag + "(?:\\s+[^>]*)?>(.*?)</" + tag + ">", Pattern.DOTALL);
+                  Matcher m = p.matcher(xml);
+                  while (m.find()) {
+                      String v = unesc(m.group(1)).trim();
+                      if (!v.isEmpty()) out.add(v);
+                  }
+                  return out;
+              }
+
+              public static String extractSetName(String xml) {
+                  if (xml == null) return "";
+                  Pattern p = Pattern.compile("<set>.*?<name>(.*?)</name>.*?</set>", Pattern.DOTALL);
+                  Matcher m = p.matcher(xml);
+                  return m.find() ? unesc(m.group(1)).trim() : "";
+              }
+
+              public static String extractActorsSummary(String xml) {
+                  if (xml == null) return "";
+                  Pattern p = Pattern.compile("<actor>.*?<name>(.*?)</name>(?:.*?<role>(.*?)</role>)?.*?</actor>", Pattern.DOTALL);
+                  Matcher m = p.matcher(xml);
+                  StringBuilder sb = new StringBuilder();
+                  int count = 0;
+                  while (m.find() && count < 8) {
+                      String name = unesc(m.group(1)).trim();
+                      String role = m.group(2) != null ? unesc(m.group(2)).trim() : "";
+                      if (!name.isEmpty()) {
+                          if (sb.length() > 0) sb.append("  •  ");
+                          sb.append(name);
+                          if (!role.isEmpty()) sb.append(" (").append(role).append(")");
+                          count++;
+                      }
+                  }
+                  return sb.toString();
+              }
+
+              public static String extractTmdbId(String xml) {
+                  if (xml == null) return "";
+                  Pattern p = Pattern.compile("<uniqueid[^>]*type=\"tmdb\"[^>]*>(.*?)</uniqueid>", Pattern.DOTALL);
+                  Matcher m = p.matcher(xml);
+                  return m.find() ? m.group(1).trim() : "";
+              }
+
+              public static String unesc(String s) {
+                  return s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                          .replace("&quot;", "\"").replace("&apos;", "'");
+              }
+
+              public static String esc(String s) {
+                  if (s == null) return "";
+                  return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                          .replace("\"", "&quot;").replace("'", "&apos;");
+              }
+
+              public static String readText(File f) {
+                  if (f == null || !f.exists()) return "";
+                  try (FileInputStream fis = new FileInputStream(f)) {
+                      byte[] data = new byte[(int) Math.min(f.length(), 512 * 1024)];
+                      int n = fis.read(data);
+                      return n > 0 ? new String(data, 0, n, StandardCharsets.UTF_8) : "";
+                  } catch (Exception e) { return ""; }
+              }
+
+              public static void writeText(File dest, String content) throws Exception {
+                  try (FileOutputStream out = new FileOutputStream(dest)) {
+                      out.write(content.getBytes(StandardCharsets.UTF_8));
+                  }
+              }
+
+              public static void collectVideos(File dir, List<File> out) {
+                  File[] list = dir.listFiles();
+                  if (list == null) return;
+                  Arrays.sort(list, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+                  for (File f : list) {
+                      if (f.isDirectory()) collectVideos(f, out);
+                      else if (isVideoFile(f)) out.add(f);
+                  }
+              }
+
+              public static boolean deleteRecursive(File f) {
+                  if (f == null || !f.exists()) return false;
+                  if (f.isDirectory()) {
+                      File[] children = f.listFiles();
+                      if (children != null) for (File c : children) deleteRecursive(c);
+                  }
+                  return f.delete();
+              }
+
+              public static List<MediaItem> scanLibrary(File baseDir, boolean isMovies) {
+                  List<MediaItem> items = new ArrayList<>();
+                  if (baseDir == null || !baseDir.exists() || !baseDir.isDirectory()) return items;
+                  File[] children = baseDir.listFiles();
+                  if (children == null) return items;
+                  Arrays.sort(children, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+
+                  for (File folder : children) {
+                      if (!folder.isDirectory() || folder.getName().startsWith(".") || folder.getName().equals("KodiMM_NFO_Backup")) continue;
+                      MediaItem it = new MediaItem();
+                      it.folder = folder;
+                      it.isMovie = isMovies;
+                      File[] files = folder.listFiles();
+                      File nfoFile;
+                      if (isMovies) {
+                          if (files != null) {
+                              for (File f : files) {
+                                  if (isVideoFile(f)) {
+                                      it.sizeBytes += f.length();
+                                      if (it.mainVideo == null || f.length() > it.mainVideo.length()) it.mainVideo = f;
+                                  } else if (f.isFile() && f.getName().toLowerCase(Locale.US).endsWith(".srt")) {
+                                      it.hasSrt = true;
+                                  }
+                              }
+                          }
+                          if (it.mainVideo == null) continue;
+                          nfoFile = new File(folder, "movie.nfo");
+                      } else {
+                          List<File> vids = new ArrayList<>();
+                          collectVideos(folder, vids);
+                          it.episodeCount = vids.size();
+                          for (File v : vids) {
+                              it.sizeBytes += v.length();
+                              if (it.mainVideo == null) it.mainVideo = v;
+                              File epNfo = new File(v.getParentFile(), stripExt(v.getName()) + ".nfo");
+                              if (!epNfo.exists() || epNfo.length() < 20) it.missingEpNfo++;
+                          }
+                          nfoFile = new File(folder, "tvshow.nfo");
+                      }
+
+                      it.hasNfo = nfoFile.exists() && nfoFile.length() > 30;
+                      if (it.hasNfo) {
+                          String xml = readText(nfoFile);
+                          it.displayTitle = extractXmlTag(xml, "title");
+                          it.originalTitle = extractXmlTag(xml, "originaltitle");
+                          it.year = extractXmlTag(xml, "year");
+                          it.rating = extractXmlTag(xml, "rating");
+                          it.runtime = extractXmlTag(xml, "runtime");
+                          it.genreList = extractXmlTagList(xml, "genre");
+                          it.genres = String.join(" • ", it.genreList);
+                          it.director = String.join(", ", extractXmlTagList(xml, "director"));
+                          it.collection = extractSetName(xml);
+                          it.plot = extractXmlTag(xml, "plot");
+                          it.actorsSummary = extractActorsSummary(xml);
+                          it.tmdbId = extractTmdbId(xml);
+                      }
+                      it.hasPoster = new File(folder, "poster.jpg").exists() && new File(folder, "poster.jpg").length() > 500;
+                      it.hasFanart = new File(folder, "fanart.jpg").exists() && new File(folder, "fanart.jpg").length() > 500;
+                      it.hasLogo = new File(folder, "clearlogo.png").exists() && new File(folder, "clearlogo.png").length() > 200;
+                      it.hasLandscape = new File(folder, "landscape.jpg").exists() && new File(folder, "landscape.jpg").length() > 500;
+
+                      if (it.displayTitle.isEmpty()) {
+                          String[] ny = cleanNameAndYear(folder.getName());
+                          it.displayTitle = ny[0].isEmpty() ? folder.getName() : ny[0];
+                          if (it.year.isEmpty() && ny[1] != null) it.year = ny[1];
+                      }
+                      items.add(it);
+                  }
+                  return items;
+              }
+
+              public static int organizeLooseMovies(File baseDir, Logger logger) {
+                  int moved = 0;
+                  File[] items = baseDir.listFiles();
+                  if (items == null) return 0;
+                  for (File item : items) {
+                      if (isVideoFile(item)) {
+                          String stem = stripExt(item.getName());
+                          String[] ny = cleanNameAndYear(stem);
+                          String folderName = sanitizeFilename((ny[1] != null) ? (ny[0] + " (" + ny[1] + ")") : ny[0]);
+                          if (folderName.isEmpty()) folderName = stem;
+                          File targetDir = new File(baseDir, folderName);
+                          if (!targetDir.exists()) targetDir.mkdirs();
+                          if (item.renameTo(new File(targetDir, item.getName()))) {
+                              moved++;
+                              if (logger != null) logger.log("📁 تنظيم: " + item.getName() + " ← " + folderName + "/");
+                              for (File sub : items) {
+                                  if (sub.isFile() && sub.getName().startsWith(stem) && sub.getName().toLowerCase(Locale.US).endsWith(".srt")) {
+                                      sub.renameTo(new File(targetDir, sub.getName()));
+                                  }
+                              }
+                          }
+                      }
+                  }
+                  return moved;
+              }
+
+              public static int syncSubtitleNames(List<MediaItem> movies, Logger logger) {
+                  int fixed = 0;
+                  for (MediaItem m : movies) {
+                      if (m.mainVideo == null) continue;
+                      String vidStem = stripExt(m.mainVideo.getName());
+                      File[] files = m.folder.listFiles();
+                      if (files == null) continue;
+                      List<File> srts = new ArrayList<>();
+                      boolean alreadyMatched = false;
+                      for (File f : files) {
+                          if (f.isFile() && f.getName().toLowerCase(Locale.US).endsWith(".srt")) {
+                              srts.add(f);
+                              if (f.getName().startsWith(vidStem)) alreadyMatched = true;
+                          }
+                      }
+                      if (!alreadyMatched && srts.size() == 1) {
+                          File src = srts.get(0);
+                          File dst = new File(m.folder, vidStem + ".ar.srt");
+                          if (!dst.exists() && src.renameTo(dst)) {
+                              fixed++;
+                              if (logger != null) logger.log("💬 مزامنة ترجمة: " + m.folder.getName() + " ← " + dst.getName());
+                          }
+                      }
+                  }
+                  return fixed;
+              }
+
+              public static int batchRenameMovies(List<MediaItem> movies, Logger logger) {
+                  int count = 0;
+                  for (MediaItem m : movies) {
+                      String base = !m.originalTitle.isEmpty() ? m.originalTitle : m.displayTitle;
+                      String targetName = sanitizeFilename(m.year.isEmpty() ? base : (base + " (" + m.year + ")"));
+                      if (!targetName.isEmpty() && !targetName.equals(m.folder.getName())) {
+                          File dest = new File(m.folder.getParentFile(), targetName);
+                          if (!dest.exists() && m.folder.renameTo(dest)) {
+                              count++;
+                              if (logger != null) logger.log("🏷 " + m.folder.getName() + " ← " + targetName);
+                          }
+                      }
+                  }
+                  return count;
+              }
+
+              public static int backupNfoFiles(File baseDir, List<MediaItem> items, Logger logger) {
+                  File backupDir = new File(baseDir, "KodiMM_NFO_Backup");
+                  if (!backupDir.exists()) backupDir.mkdirs();
+                  int count = 0;
+                  for (MediaItem it : items) {
+                      File nfo = new File(it.folder, it.isMovie ? "movie.nfo" : "tvshow.nfo");
+                      if (nfo.exists()) {
+                          try {
+                              writeText(new File(backupDir, sanitizeFilename(it.folder.getName()) + ".nfo"), readText(nfo));
+                              count++;
+                          } catch (Exception ignored) {}
+                      }
+                  }
+                  if (logger != null) logger.log("💾 تم نسخ " + count + " ملف NFO احتياطياً");
+                  return count;
+              }
+
+              public static int restoreNfoFiles(File baseDir, List<MediaItem> items, Logger logger) {
+                  File backupDir = new File(baseDir, "KodiMM_NFO_Backup");
+                  if (!backupDir.exists()) return 0;
+                  int count = 0;
+                  for (MediaItem it : items) {
+                      File src = new File(backupDir, sanitizeFilename(it.folder.getName()) + ".nfo");
+                      if (src.exists()) {
+                          try {
+                              File dst = new File(it.folder, it.isMovie ? "movie.nfo" : "tvshow.nfo");
+                              writeText(dst, readText(src));
+                              count++;
+                          } catch (Exception ignored) {}
+                      }
+                  }
+                  if (logger != null) logger.log("♻️ تم استعادة " + count + " ملف NFO");
+                  return count;
+              }
+
+              public static int cleanupBrokenFiles(File baseDir, Logger logger) {
+                  int removed = 0;
+                  if (baseDir == null || !baseDir.exists()) return 0;
+                  File[] list = baseDir.listFiles();
+                  if (list == null) return 0;
+                  for (File f : list) {
+                      if (f.isDirectory()) removed += cleanupBrokenFiles(f, logger);
+                      else if (f.isFile()) {
+                          String n = f.getName().toLowerCase(Locale.US);
+                          if ((n.endsWith(".jpg") || n.endsWith(".png") || n.endsWith(".nfo")) && f.length() < 30) {
+                              if (f.delete()) {
+                                  removed++;
+                                  if (logger != null) logger.log("🧹 حذف ملف تالف: " + f.getName());
+                              }
+                          }
+                      }
+                  }
+                  return removed;
+              }
+
+              public static File exportCsvReport(File destDir, List<MediaItem> movies, List<MediaItem> tv) throws Exception {
+                  File out = new File(destDir, "KodiMM_Library_Report.csv");
+                  StringBuilder sb = new StringBuilder();
+                  sb.append('\uFEFF');
+                  sb.append("Type,Title,Year,Rating,Collection,Genres,Size,NFO,Poster,Fanart,Logo,SRT,Folder\n");
+                  for (MediaItem m : movies) {
+                      sb.append("Movie,\"").append(m.displayTitle.replace("\"", "'")).append("\",")
+                        .append(m.year).append(",").append(m.rating).append(",\"")
+                        .append(m.collection.replace("\"", "'")).append("\",\"")
+                        .append(m.genres.replace("\"", "'")).append("\",\"")
+                        .append(formatSize(m.sizeBytes)).append("\",")
+                        .append(m.hasNfo).append(",").append(m.hasPoster).append(",")
+                        .append(m.hasFanart).append(",").append(m.hasLogo).append(",")
+                        .append(m.hasSrt).append(",\"").append(m.folder.getName()).append("\"\n");
+                  }
+                  for (MediaItem t : tv) {
+                      sb.append("TVShow,\"").append(t.displayTitle.replace("\"", "'")).append("\",")
+                        .append(t.year).append(",").append(t.rating).append(",\"\",\"")
+                        .append(t.genres.replace("\"", "'")).append("\",\"")
+                        .append(formatSize(t.sizeBytes)).append("\",")
+                        .append(t.hasNfo).append(",").append(t.hasPoster).append(",")
+                        .append(t.hasFanart).append(",").append(t.hasLogo).append(",false,\"")
+                        .append(t.folder.getName()).append("\"\n");
+                  }
+                  writeText(out, sb.toString());
+                  return out;
+              }
+
+              public static File exportHtmlCatalog(File destDir, List<MediaItem> movies, List<MediaItem> tv) throws Exception {
+                  File out = new File(destDir, "KodiMM_Catalog.html");
+                  StringBuilder sb = new StringBuilder();
+                  sb.append("<!DOCTYPE html><html lang=\"ar\" dir=\"rtl\"><head><meta charset=\"UTF-8\">")
+                    .append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
+                    .append("<title>كتالوج مكتبة الأفلام والمسلسلات</title>")
+                    .append("<style>body{background:#070B14;color:#F8FAFC;font-family:sans-serif;margin:0;padding:18px}")
+                    .append("h1{color:#E50914;margin-bottom:6px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-top:16px}")
+                    .append(".card{background:#131B2E;border:1px solid #1E293B;border-radius:12px;overflow:hidden;padding:10px}")
+                    .append(".t{font-weight:bold;font-size:14px;margin:6px 0 4px}.m{color:#94A3B8;font-size:12px}.r{color:#FBBF24;font-weight:bold}")
+                    .append("</style></head><body><h1>🎬 مكتبة الأفلام والمسلسلات</h1>")
+                    .append("<p>الأفلام: ").append(movies.size()).append(" | المسلسلات: ").append(tv.size()).append("</p><div class=\"grid\">");
+                  for (MediaItem m : movies) {
+                      sb.append("<div class=\"card\"><div class=\"t\">").append(esc(m.displayTitle)).append("</div>")
+                        .append("<div class=\"m\">").append(esc(m.year)).append(" • <span class=\"r\">★ ")
+                        .append(esc(m.rating.isEmpty() ? "-" : m.rating)).append("</span> • ").append(formatSize(m.sizeBytes))
+                        .append("</div><div class=\"m\">").append(esc(m.genres)).append("</div></div>");
+                  }
+                  for (MediaItem t : tv) {
+                      sb.append("<div class=\"card\"><div class=\"t\">📺 ").append(esc(t.displayTitle)).append("</div>")
+                        .append("<div class=\"m\">").append(esc(t.year)).append(" • ").append(t.episodeCount).append(" حلقة • ")
+                        .append(formatSize(t.sizeBytes)).append("</div></div>");
+                  }
+                  sb.append("</div></body></html>");
+                  writeText(out, sb.toString());
+                  return out;
+              }
+
+              public static JSONObject tmdbGet(String endpoint, String apiKey, String extraQuery) throws Exception {
+                  String urlStr = TMDB_API + endpoint + "?api_key=" + URLEncoder.encode(apiKey, "UTF-8")
+                      + (extraQuery != null && !extraQuery.isEmpty() ? "&" + extraQuery : "");
+                  HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+                  conn.setConnectTimeout(15000);
+                  conn.setReadTimeout(20000);
+                  conn.setRequestMethod("GET");
+                  int code = conn.getResponseCode();
+                  if (code != 200) throw new Exception("TMDB HTTP " + code);
+                  try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                      StringBuilder sb = new StringBuilder();
+                      String line;
+                      while ((line = br.readLine()) != null) sb.append(line);
+                      return new JSONObject(sb.toString());
+                  } finally { conn.disconnect(); }
+              }
+
+              public static String fetchYoutubeTrailerKey(boolean isMovie, String tmdbId, String apiKey) {
+                  try {
+                      JSONObject obj = tmdbGet((isMovie ? "/movie/" : "/tv/") + tmdbId + "/videos", apiKey, "");
+                      JSONArray arr = obj.optJSONArray("results");
+                      if (arr == null) return null;
+                      String fallback = null;
+                      for (int i = 0; i < arr.length(); i++) {
+                          JSONObject v = arr.getJSONObject(i);
+                          if ("YouTube".equalsIgnoreCase(v.optString("site"))) {
+                              String key = v.optString("key", "");
+                              if ("Trailer".equalsIgnoreCase(v.optString("type"))) return key;
+                              if (fallback == null) fallback = key;
+                          }
+                      }
+                      return fallback;
+                  } catch (Exception e) { return null; }
+              }
+
+              public static boolean downloadFile(String urlStr, File dest) {
+                  try {
+                      HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+                      conn.setConnectTimeout(15000); conn.setReadTimeout(30000);
+                      if (conn.getResponseCode() != 200) return false;
+                      try (InputStream in = conn.getInputStream(); FileOutputStream out = new FileOutputStream(dest)) {
+                          byte[] buf = new byte[32768];
+                          int n;
+                          while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                      } finally { conn.disconnect(); }
+                      return dest.exists() && dest.length() > 100;
+                  } catch (Exception e) { return false; }
+              }
+
+              public static String pickBestLogo(JSONObject images, String langShort) {
+                  JSONArray logos = images.optJSONArray("logos");
+                  if (logos == null || logos.length() == 0) return null;
+                  String best = null;
+                  double bestScore = -1;
+                  for (int i = 0; i < logos.length(); i++) {
+                      JSONObject l = logos.optJSONObject(i);
+                      if (l == null) continue;
+                      String fp = l.optString("file_path", "");
+                      if (fp.isEmpty()) continue;
+                      String iso = l.optString("iso_639_1", "");
+                      double score = l.optDouble("vote_average", 0) * 10 + l.optInt("width", 0) / 1000.0;
+                      if ("en".equals(iso)) score += 100;
+                      else if (langShort.equals(iso)) score += 85;
+                      if (score > bestScore) { bestScore = score; best = fp; }
+                  }
+                  return best;
+              }
+
+              public static JSONArray searchTmdb(boolean isMovie, String query, String year, String apiKey, String lang) throws Exception {
+                  String endpoint = isMovie ? "/search/movie" : "/search/tv";
+                  String yearParam = isMovie ? "&year=" : "&first_air_date_year=";
+                  String q = "query=" + URLEncoder.encode(query, "UTF-8") + "&language=" + lang
+                      + (year != null && !year.isEmpty() ? yearParam + year : "");
+                  JSONArray res = tmdbGet(endpoint, apiKey, q).optJSONArray("results");
+                  if ((res == null || res.length() == 0) && year != null && !year.isEmpty()) {
+                      q = "query=" + URLEncoder.encode(query, "UTF-8") + "&language=" + lang;
+                      res = tmdbGet(endpoint, apiKey, q).optJSONArray("results");
+                  }
+                  return res != null ? res : new JSONArray();
+              }
+
+              public static File scrapeMovieById(File folder, int tmdbId, ScrapeOptions opt, Logger logger) throws Exception {
+                  JSONObject d = tmdbGet("/movie/" + tmdbId, opt.apiKey, "language=" + opt.lang);
+                  if (d.optString("overview", "").isEmpty() && !opt.lang.startsWith("en")) {
+                      JSONObject en = tmdbGet("/movie/" + tmdbId, opt.apiKey, "language=en-US");
+                      d.put("overview", en.optString("overview", ""));
+                      if (d.optString("tagline", "").isEmpty()) d.put("tagline", en.optString("tagline", ""));
+                  }
+                  JSONObject credits = tmdbGet("/movie/" + tmdbId + "/credits", opt.apiKey, "");
+                  String langShort = opt.lang.split("-")[0];
+                  JSONObject images = tmdbGet("/movie/" + tmdbId + "/images", opt.apiKey, "include_image_language=en," + langShort + ",null");
+
+                  StringBuilder xml = new StringBuilder();
+                  xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<movie>\n");
+                  xml.append("  <title>").append(esc(d.optString("title"))).append("</title>\n");
+                  xml.append("  <originaltitle>").append(esc(d.optString("original_title"))).append("</originaltitle>\n");
+                  xml.append("  <tagline>").append(esc(d.optString("tagline"))).append("</tagline>\n");
+                  xml.append("  <plot>").append(esc(d.optString("overview"))).append("</plot>\n");
+                  xml.append("  <outline>").append(esc(d.optString("overview"))).append("</outline>\n");
+                  if (d.optInt("runtime") > 0) xml.append("  <runtime>").append(d.optInt("runtime")).append("</runtime>\n");
+                  String rel = d.optString("release_date", "");
+                  String year = rel.length() >= 4 ? rel.substring(0, 4) : "";
+                  if (!rel.isEmpty()) {
+                      xml.append("  <premiered>").append(esc(rel)).append("</premiered>\n");
+                      if (!year.isEmpty()) xml.append("  <year>").append(esc(year)).append("</year>\n");
+                  }
+                  double vote = d.optDouble("vote_average", 0);
+                  if (vote > 0) {
+                      xml.append("  <ratings><rating name=\"themoviedb\" max=\"10\" default=\"true\"><value>")
+                         .append(String.format(Locale.US, "%.1f", vote))
+                         .append("</value><votes>").append(d.optInt("vote_count", 0))
+                         .append("</votes></rating></ratings>\n");
+                      xml.append(String.format(Locale.US, "  <rating>%.1f</rating>\n", vote));
+                  }
+                  xml.append("  <uniqueid type=\"tmdb\" default=\"true\">").append(tmdbId).append("</uniqueid>\n");
+                  if (!d.optString("imdb_id", "").isEmpty()) xml.append("  <uniqueid type=\"imdb\">").append(esc(d.optString("imdb_id"))).append("</uniqueid>\n");
+                  JSONArray genres = d.optJSONArray("genres");
+                  if (genres != null) for (int i = 0; i < genres.length(); i++) xml.append("  <genre>").append(esc(genres.getJSONObject(i).optString("name"))).append("</genre>\n");
+                  JSONArray studios = d.optJSONArray("production_companies");
+                  if (studios != null) for (int i = 0; i < Math.min(3, studios.length()); i++) xml.append("  <studio>").append(esc(studios.getJSONObject(i).optString("name"))).append("</studio>\n");
+                  JSONObject coll = d.optJSONObject("belongs_to_collection");
+                  if (coll != null && !coll.optString("name", "").isEmpty()) xml.append("  <set><name>").append(esc(coll.optString("name"))).append("</name></set>\n");
+                  JSONArray crew = credits.optJSONArray("crew");
+                  if (crew != null) {
+                      for (int i = 0; i < crew.length(); i++) {
+                          JSONObject c = crew.getJSONObject(i);
+                          String job = c.optString("job");
+                          if ("Director".equals(job)) xml.append("  <director>").append(esc(c.optString("name"))).append("</director>\n");
+                          else if ("Screenplay".equals(job) || "Writer".equals(job)) xml.append("  <credits>").append(esc(c.optString("name"))).append("</credits>\n");
+                      }
+                  }
+                  JSONArray cast = credits.optJSONArray("cast");
+                  if (cast != null) {
+                      for (int i = 0; i < Math.min(15, cast.length()); i++) {
+                          JSONObject a = cast.getJSONObject(i);
+                          xml.append("  <actor><name>").append(esc(a.optString("name")))
+                             .append("</name><role>").append(esc(a.optString("character")))
+                             .append("</role><order>").append(i).append("</order>");
+                          String pp = a.optString("profile_path", "");
+                          if (!pp.isEmpty()) xml.append("<thumb>").append(TMDB_IMG).append("/w500").append(pp).append("</thumb>");
+                          xml.append("</actor>\n");
+                      }
+                  }
+                  xml.append("</movie>\n");
+                  writeText(new File(folder, "movie.nfo"), xml.toString());
+                  if (logger != null) logger.log("  ✓ movie.nfo");
+
+                  File poster = new File(folder, "poster.jpg");
+                  String pp = d.optString("poster_path", "");
+                  if (opt.dlPoster && (opt.force || !poster.exists()) && !pp.isEmpty() && downloadFile(TMDB_IMG + "/" + opt.posterSize + pp, poster)) {
+                      if (logger != null) logger.log("  ✓ poster.jpg");
+                  }
+                  File fanart = new File(folder, "fanart.jpg");
+                  String bp = d.optString("backdrop_path", "");
+                  if (opt.dlFanart && (opt.force || !fanart.exists()) && !bp.isEmpty() && downloadFile(TMDB_IMG + "/" + opt.fanartSize + bp, fanart)) {
+                      if (logger != null) logger.log("  ✓ fanart.jpg");
+                  }
+                  File land = new File(folder, "landscape.jpg");
+                  if (opt.dlLandscape && (opt.force || !land.exists()) && !bp.isEmpty()) {
+                      JSONArray bds = images.optJSONArray("backdrops");
+                      String landPath = (bds != null && bds.length() > 1) ? bds.getJSONObject(1).optString("file_path", bp) : bp;
+                      if (downloadFile(TMDB_IMG + "/w780" + landPath, land) && logger != null) logger.log("  ✓ landscape.jpg");
+                  }
+                  File logo = new File(folder, "clearlogo.png");
+                  String lp = pickBestLogo(images, langShort);
+                  if (opt.dlLogo && (opt.force || !logo.exists()) && lp != null && downloadFile(TMDB_IMG + "/original" + lp, logo)) {
+                      if (logger != null) logger.log("  ✓ clearlogo.png");
+                  }
+
+                  if (opt.autoRename) {
+                      String enTitle = d.optString("original_title", d.optString("title", ""));
+                      if (enTitle.isEmpty()) enTitle = d.optString("title", "");
+                      String newName = sanitizeFilename(year.isEmpty() ? enTitle : (enTitle + " (" + year + ")"));
+                      if (!newName.isEmpty() && !newName.equals(folder.getName())) {
+                          File renamed = new File(folder.getParentFile(), newName);
+                          if (!renamed.exists() && folder.renameTo(renamed)) {
+                              if (logger != null) logger.log("  🏷 إعادة تسمية ← " + newName);
+                              return renamed;
+                          }
+                      }
+                  }
+                  return folder;
+              }
+
+              public static File scrapeTvById(File folder, int tvId, ScrapeOptions opt, Logger logger) throws Exception {
+                  JSONObject d = tmdbGet("/tv/" + tvId, opt.apiKey, "language=" + opt.lang);
+                  if (d.optString("overview", "").isEmpty() && !opt.lang.startsWith("en")) {
+                      JSONObject en = tmdbGet("/tv/" + tvId, opt.apiKey, "language=en-US");
+                      d.put("overview", en.optString("overview", ""));
+                  }
+                  JSONObject credits = tmdbGet("/tv/" + tvId + "/credits", opt.apiKey, "");
+                  String langShort = opt.lang.split("-")[0];
+                  JSONObject images = tmdbGet("/tv/" + tvId + "/images", opt.apiKey, "include_image_language=en," + langShort + ",null");
+
+                  File nfo = new File(folder, "tvshow.nfo");
+                  if (opt.force || !nfo.exists()) {
+                      StringBuilder xml = new StringBuilder();
+                      xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<tvshow>\n");
+                      xml.append("  <title>").append(esc(d.optString("name"))).append("</title>\n");
+                      xml.append("  <originaltitle>").append(esc(d.optString("original_name"))).append("</originaltitle>\n");
+                      xml.append("  <plot>").append(esc(d.optString("overview"))).append("</plot>\n");
+                      String fa = d.optString("first_air_date", "");
+                      if (!fa.isEmpty()) {
+                          xml.append("  <premiered>").append(esc(fa)).append("</premiered>\n");
+                          if (fa.length() >= 4) xml.append("  <year>").append(esc(fa.substring(0, 4))).append("</year>\n");
+                      }
+                      double vote = d.optDouble("vote_average", 0);
+                      if (vote > 0) xml.append(String.format(Locale.US, "  <rating>%.1f</rating>\n", vote));
+                      xml.append("  <uniqueid type=\"tmdb\" default=\"true\">").append(tvId).append("</uniqueid>\n");
+                      JSONArray genres = d.optJSONArray("genres");
+                      if (genres != null) for (int i = 0; i < genres.length(); i++) xml.append("  <genre>").append(esc(genres.getJSONObject(i).optString("name"))).append("</genre>\n");
+                      JSONArray cast = credits.optJSONArray("cast");
+                      if (cast != null) {
+                          for (int i = 0; i < Math.min(12, cast.length()); i++) {
+                              JSONObject a = cast.getJSONObject(i);
+                              xml.append("  <actor><name>").append(esc(a.optString("name")))
+                                 .append("</name><role>").append(esc(a.optString("character")))
+                                 .append("</role><order>").append(i).append("</order>");
+                              String pp = a.optString("profile_path", "");
+                              if (!pp.isEmpty()) xml.append("<thumb>").append(TMDB_IMG).append("/w500").append(pp).append("</thumb>");
+                              xml.append("</actor>\n");
+                          }
+                      }
+                      xml.append("</tvshow>\n");
+                      writeText(nfo, xml.toString());
+                      if (logger != null) logger.log("  ✓ tvshow.nfo");
+                  }
+
+                  File poster = new File(folder, "poster.jpg");
+                  String pp = d.optString("poster_path", "");
+                  if (opt.dlPoster && (opt.force || !poster.exists()) && !pp.isEmpty() && downloadFile(TMDB_IMG + "/" + opt.posterSize + pp, poster)) {
+                      if (logger != null) logger.log("  ✓ poster.jpg");
+                  }
+                  File fanart = new File(folder, "fanart.jpg");
+                  String bp = d.optString("backdrop_path", "");
+                  if (opt.dlFanart && (opt.force || !fanart.exists()) && !bp.isEmpty() && downloadFile(TMDB_IMG + "/" + opt.fanartSize + bp, fanart)) {
+                      if (logger != null) logger.log("  ✓ fanart.jpg");
+                  }
+                  File logo = new File(folder, "clearlogo.png");
+                  String lp = pickBestLogo(images, langShort);
+                  if (opt.dlLogo && (opt.force || !logo.exists()) && lp != null && downloadFile(TMDB_IMG + "/original" + lp, logo)) {
+                      if (logger != null) logger.log("  ✓ clearlogo.png");
+                  }
+
+                  if (opt.dlSeasonPosters) {
+                      JSONArray seasons = d.optJSONArray("seasons");
+                      if (seasons != null) {
+                          for (int i = 0; i < seasons.length(); i++) {
+                              JSONObject s = seasons.getJSONObject(i);
+                              int sNum = s.optInt("season_number", -1);
+                              String sp = s.optString("poster_path", "");
+                              if (sNum > 0 && !sp.isEmpty()) {
+                                  File spFile = new File(folder, String.format(Locale.US, "season%02d-poster.jpg", sNum));
+                                  if (opt.force || !spFile.exists()) downloadFile(TMDB_IMG + "/" + opt.posterSize + sp, spFile);
+                              }
+                          }
+                      }
+                  }
+
+                  Map<Integer, JSONArray> seasonCache = new HashMap<>();
+                  List<File> videos = new ArrayList<>();
+                  collectVideos(folder, videos);
+                  for (File vid : videos) {
+                      String stem = stripExt(vid.getName());
+                      File epNfo = new File(vid.getParentFile(), stem + ".nfo");
+                      File epThumb = new File(vid.getParentFile(), stem + "-thumb.jpg");
+                      if (!opt.force && epNfo.exists() && (!opt.dlEpisodeThumbs || epThumb.exists())) continue;
+                      Matcher m = EPISODE_PATTERN.matcher(stem);
+                      if (!m.find()) continue;
+                      int sNum = Integer.parseInt(m.group(1) != null ? m.group(1) : m.group(3));
+                      int eNum = Integer.parseInt(m.group(2) != null ? m.group(2) : m.group(4));
+                      if (!seasonCache.containsKey(sNum)) {
+                          try {
+                              JSONObject sObj = tmdbGet("/tv/" + tvId + "/season/" + sNum, opt.apiKey, "language=" + opt.lang);
+                              seasonCache.put(sNum, sObj.optJSONArray("episodes"));
+                          } catch (Exception e) { seasonCache.put(sNum, null); }
+                      }
+                      JSONArray eps = seasonCache.get(sNum);
+                      if (eps != null) {
+                          for (int i = 0; i < eps.length(); i++) {
+                              JSONObject ep = eps.getJSONObject(i);
+                              if (ep.optInt("episode_number") == eNum) {
+                                  if (opt.force || !epNfo.exists()) {
+                                      StringBuilder ex = new StringBuilder();
+                                      ex.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<episodedetails>\n");
+                                      ex.append("  <title>").append(esc(ep.optString("name"))).append("</title>\n");
+                                      ex.append("  <season>").append(sNum).append("</season>\n");
+                                      ex.append("  <episode>").append(eNum).append("</episode>\n");
+                                      ex.append("  <plot>").append(esc(ep.optString("overview"))).append("</plot>\n");
+                                      ex.append("  <aired>").append(esc(ep.optString("air_date"))).append("</aired>\n");
+                                      if (ep.optDouble("vote_average", 0) > 0) ex.append(String.format(Locale.US, "  <rating>%.1f</rating>\n", ep.optDouble("vote_average")));
+                                      ex.append("</episodedetails>\n");
+                                      writeText(epNfo, ex.toString());
+                                      if (logger != null) logger.log(String.format(Locale.US, "  ✓ S%02dE%02d.nfo", sNum, eNum));
+                                  }
+                                  String still = ep.optString("still_path", "");
+                                  if (opt.dlEpisodeThumbs && (opt.force || !epThumb.exists()) && !still.isEmpty()) {
+                                      downloadFile(TMDB_IMG + "/w500" + still, epThumb);
+                                  }
+                                  break;
+                              }
+                          }
+                      }
+                  }
+                  return folder;
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/kodimm/lite/MainActivity.java
+          package com.kodimm.lite;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.app.AlertDialog;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.graphics.Bitmap;
+          import android.graphics.BitmapFactory;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.os.StrictMode;
+          import android.provider.Settings;
+          import android.text.Editable;
+          import android.text.TextUtils;
+          import android.text.TextWatcher;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.Button;
+          import android.widget.CheckBox;
+          import android.widget.EditText;
+          import android.widget.FrameLayout;
+          import android.widget.HorizontalScrollView;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.ProgressBar;
+          import android.widget.RadioButton;
+          import android.widget.RadioGroup;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          import java.io.File;
+          import java.io.InputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.util.ArrayList;
+          import java.util.Arrays;
+          import java.util.Collections;
+          import java.util.HashMap;
+          import java.util.HashSet;
+          import java.util.List;
+          import java.util.Locale;
+          import java.util.Map;
+          import java.util.Random;
+          import java.util.Set;
+          import java.util.TreeMap;
+          import java.util.TreeSet;
+
+          public class MainActivity extends Activity {
+
+              private static final String PREFS = "kodimm_ult_prefs";
+              private static final String[] THEME_ACCENTS = {"#E50914", "#2563EB", "#9333EA", "#10B981"};
+              private int themeIdx = 0;
+
+              private LocalStreamServer streamServer = new LocalStreamServer();
+
+              private LinearLayout tabMoviesView, tabTvView, tabToolsView, tabSettingsView;
+              private Button navMovies, navTv, navTools, navSettings, btnViewToggle;
+
+              private EditText etSearchMovies, etSearchTv;
+              private LinearLayout listMoviesContainer, listTvContainer, genreChipsMovies, spotlightBox;
+              private TextView tvMoviesStats, tvTvStats;
+              private int movieFilter = 0, tvFilter = 0;
+              private String selectedGenre = "";
+              private String selectedCollection = "";
+              private int sortMode = 0;
+              private boolean isGridView = true;
+
+              private Set<String> favorites = new HashSet<>();
+              private Set<String> watched = new HashSet<>();
+              private List<MediaHelper.MediaItem> cachedMovies = new ArrayList<>();
+              private List<MediaHelper.MediaItem> cachedTv = new ArrayList<>();
+
+              // Tools tab
+              private ProgressBar progressBar;
+              private TextView tvToolsStatus, tvLog, tvDashboard, tvServerStatus;
+              private ScrollView logScroll;
+              private Button btnServerToggle, btnScanAll, btnScanMovies, btnScanTv, btnOrganize, btnRenameAll, btnSyncSrt, btnCleanup, btnDupes, btnNoSrt, btnBackup, btnRestore, btnCsv, btnHtml, btnAnalytics, btnStop;
+              private volatile boolean isRunning = false;
+              private volatile boolean stopRequested = false;
+
+              // Settings tab
+              private Button btnPerm;
+              private EditText etApiKey, etMoviesPath, etTvPath;
+              private RadioButton rbAr, rbEn, rbQualMed, rbQualHigh, rbQualOrig;
+              private CheckBox cbPoster, cbFanart, cbLogo, cbLandscape, cbSeasonPosters, cbEpThumbs, cbForce, cbAutoRename;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  StrictMode.setVmPolicy(new StrictMode.VmPolicy.Builder().build());
+                  SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+                  themeIdx = sp.getInt("theme_idx", 0);
+                  favorites = new HashSet<>(sp.getStringSet("favorites", new HashSet<>()));
+                  watched = new HashSet<>(sp.getStringSet("watched", new HashSet<>()));
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                      getWindow().setStatusBarColor(Color.parseColor("#070B14"));
+                      getWindow().setNavigationBarColor(Color.parseColor("#0F172A"));
+                  }
+                  buildRootUi();
+                  loadPrefs();
+                  updatePermissionButton();
+                  switchTab(0);
+                  refreshAllLibraries();
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  updatePermissionButton();
+              }
+
+              @Override
+              protected void onDestroy() {
+                  streamServer.stop();
+                  super.onDestroy();
+              }
+
+              private String accent() {
+                  return THEME_ACCENTS[Math.max(0, Math.min(themeIdx, THEME_ACCENTS.length - 1))];
+              }
+
+              private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
+
+              private GradientDrawable roundBg(String hex, int radiusDp) {
+                  GradientDrawable d = new GradientDrawable();
+                  d.setColor(Color.parseColor(hex));
+                  d.setCornerRadius(dp(radiusDp));
+                  return d;
+              }
+
+              private GradientDrawable cardBg(String fillHex, String strokeHex, int radiusDp) {
+                  GradientDrawable d = new GradientDrawable();
+                  d.setColor(Color.parseColor(fillHex));
+                  d.setStroke(dp(1), Color.parseColor(strokeHex));
+                  d.setCornerRadius(dp(radiusDp));
+                  return d;
+              }
+
+              private GradientDrawable darkGradientOverlay() {
+                  return new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0x11070B14, 0x99070B14, 0xF5070B14});
+              }
+
+              private void buildRootUi() {
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setBackgroundColor(Color.parseColor("#070B14"));
+                  root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+
+                  // Header
+                  LinearLayout header = new LinearLayout(this);
+                  header.setOrientation(LinearLayout.HORIZONTAL);
+                  header.setBackgroundColor(Color.parseColor("#0F172A"));
+                  header.setPadding(dp(10), dp(12), dp(10), dp(10));
+                  header.setGravity(Gravity.CENTER_VERTICAL);
+
+                  TextView appTitle = new TextView(this);
+                  appTitle.setText("🎬 KodiMM Ultimate");
+                  appTitle.setTextColor(Color.WHITE);
+                  appTitle.setTextSize(17);
+                  appTitle.setTypeface(null, Typeface.BOLD);
+                  appTitle.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                  header.addView(appTitle);
+
+                  Button btnCols = makeSmallBtn("📚", "#1E293B");
+                  btnCols.setOnClickListener(v -> showCollectionsDialog());
+                  header.addView(btnCols);
+
+                  LinearLayout.LayoutParams mLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  mLp.setMargins(dp(4), 0, dp(4), 0);
+
+                  Button btnDice = makeSmallBtn("🎲", accent());
+                  btnDice.setLayoutParams(mLp);
+                  btnDice.setOnClickListener(v -> pickRandomMovie());
+                  header.addView(btnDice);
+
+                  btnViewToggle = makeSmallBtn("▦", "#1E293B");
+                  btnViewToggle.setOnClickListener(v -> {
+                      isGridView = !isGridView;
+                      btnViewToggle.setText(isGridView ? "▦" : "☰");
+                      renderLibrary(true);
+                      renderLibrary(false);
+                  });
+                  header.addView(btnViewToggle);
+
+                  Button btnSort = makeSmallBtn("↕", "#1E293B");
+                  btnSort.setLayoutParams(mLp);
+                  btnSort.setOnClickListener(v -> showSortDialog());
+                  header.addView(btnSort);
+
+                  Button btnRefresh = makeSmallBtn("🔄", "#1E293B");
+                  btnRefresh.setOnClickListener(v -> refreshAllLibraries());
+                  header.addView(btnRefresh);
+                  root.addView(header);
+
+                  FrameLayout contentFrame = new FrameLayout(this);
+                  contentFrame.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+                  root.addView(contentFrame);
+
+                  tabMoviesView = buildLibraryTab(true);
+                  tabTvView = buildLibraryTab(false);
+                  tabToolsView = buildToolsTab();
+                  tabSettingsView = buildSettingsTab();
+
+                  contentFrame.addView(tabMoviesView);
+                  contentFrame.addView(tabTvView);
+                  contentFrame.addView(tabToolsView);
+                  contentFrame.addView(tabSettingsView);
+
+                  // Bottom Navigation
+                  LinearLayout navBar = new LinearLayout(this);
+                  navBar.setOrientation(LinearLayout.HORIZONTAL);
+                  navBar.setBackgroundColor(Color.parseColor("#0F172A"));
+                  navBar.setPadding(dp(8), dp(6), dp(8), dp(10));
+
+                  navMovies = makeNavBtn("🎬 الأفلام");
+                  navTv = makeNavBtn("📺 المسلسلات");
+                  navTools = makeNavBtn("⚡ الأدوات والبث");
+                  navSettings = makeNavBtn("⚙️ الإعدادات");
+
+                  navMovies.setOnClickListener(v -> switchTab(0));
+                  navTv.setOnClickListener(v -> switchTab(1));
+                  navTools.setOnClickListener(v -> switchTab(2));
+                  navSettings.setOnClickListener(v -> switchTab(3));
+
+                  navBar.addView(navMovies); navBar.addView(navTv); navBar.addView(navTools); navBar.addView(navSettings);
+                  root.addView(navBar);
+
+                  setContentView(root);
+              }
+
+              private Button makeNavBtn(String text) {
+                  Button b = new Button(this);
+                  b.setText(text); b.setTextSize(11); b.setAllCaps(false);
+                  b.setTextColor(Color.parseColor("#94A3B8"));
+                  b.setBackgroundColor(Color.TRANSPARENT);
+                  b.setLayoutParams(new LinearLayout.LayoutParams(0, dp(42), 1f));
+                  b.setPadding(dp(2), dp(2), dp(2), dp(2));
+                  return b;
+              }
+
+              private void switchTab(int idx) {
+                  tabMoviesView.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
+                  tabTvView.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
+                  tabToolsView.setVisibility(idx == 2 ? View.VISIBLE : View.GONE);
+                  tabSettingsView.setVisibility(idx == 3 ? View.VISIBLE : View.GONE);
+
+                  Button[] navs = {navMovies, navTv, navTools, navSettings};
+                  for (int i = 0; i < navs.length; i++) {
+                      if (i == idx) { navs[i].setTextColor(Color.WHITE); navs[i].setBackground(roundBg(accent(), 10)); }
+                      else { navs[i].setTextColor(Color.parseColor("#94A3B8")); navs[i].setBackgroundColor(Color.TRANSPARENT); }
+                  }
+              }
+
+              private void showCollectionsDialog() {
+                  Map<String, Integer> cols = new TreeMap<>();
+                  for (MediaHelper.MediaItem m : cachedMovies) {
+                      if (!m.collection.isEmpty()) cols.put(m.collection, cols.getOrDefault(m.collection, 0) + 1);
+                  }
+                  if (cols.isEmpty()) {
+                      Toast.makeText(this, "لم يتم العثور على سلاسل أفلام (Collections) بعد — افحص أفلامك أولاً", Toast.LENGTH_LONG).show();
+                      return;
+                  }
+                  List<String> keys = new ArrayList<>();
+                  keys.add("");
+                  keys.addAll(cols.keySet());
+                  String[] labels = new String[keys.size()];
+                  labels[0] = "🎬 عرض كل الأفلام (إلغاء فلتر السلسلة)";
+                  for (int i = 1; i < keys.size(); i++) {
+                      labels[i] = "📚 " + keys.get(i) + " (" + cols.get(keys.get(i)) + " أفلام)";
+                  }
+                  new AlertDialog.Builder(this)
+                      .setTitle("📚 سلاسل ومجموعات الأفلام")
+                      .setItems(labels, (d, which) -> {
+                          selectedCollection = keys.get(which);
+                          switchTab(0);
+                          renderLibrary(true);
+                      })
+                      .setNegativeButton("إغلاق", null)
+                      .show();
+              }
+
+              private void pickRandomMovie() {
+                  List<MediaHelper.MediaItem> pool = new ArrayList<>();
+                  for (MediaHelper.MediaItem m : cachedMovies) if (!watched.contains(m.folder.getAbsolutePath())) pool.add(m);
+                  if (pool.isEmpty()) pool = cachedMovies;
+                  if (pool.isEmpty()) { Toast.makeText(this, "لا توجد أفلام في المكتبة بعد", Toast.LENGTH_SHORT).show(); return; }
+                  showDetailDialog(pool.get(new Random().nextInt(pool.size())));
+              }
+
+              private void showSortDialog() {
+                  String[] opts = {"الاسم (أ ← ي)", "السنة (الأحدث أولاً)", "التقييم (الأعلى أولاً)", "الحجم (الأكبر أولاً)"};
+                  new AlertDialog.Builder(this).setTitle("↕ ترتيب المكتبة حسب")
+                      .setSingleChoiceItems(opts, sortMode, (d, w) -> { sortMode = w; d.dismiss(); renderLibrary(true); renderLibrary(false); })
+                      .show();
+              }
+
+              private LinearLayout buildLibraryTab(boolean isMovies) {
+                  LinearLayout wrap = new LinearLayout(this);
+                  wrap.setOrientation(LinearLayout.VERTICAL);
+                  wrap.setPadding(dp(10), dp(8), dp(10), dp(4));
+
+                  EditText etSearch = makeInput(isMovies ? "🔎 ابحث بالاسم أو النوع أو المخرج أو السلسلة..." : "🔎 ابحث في المسلسلات...");
+                  etSearch.addTextChangedListener(new TextWatcher() {
+                      public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+                      public void onTextChanged(CharSequence s, int a, int b, int c) {}
+                      public void afterTextChanged(Editable s) { renderLibrary(isMovies); }
+                  });
+                  wrap.addView(etSearch);
+                  if (isMovies) etSearchMovies = etSearch; else etSearchTv = etSearch;
+
+                  HorizontalScrollView fScroll = new HorizontalScrollView(this);
+                  fScroll.setHorizontalScrollBarEnabled(false);
+                  LinearLayout filterRow = new LinearLayout(this);
+                  filterRow.setOrientation(LinearLayout.HORIZONTAL);
+                  filterRow.setPadding(0, dp(8), 0, dp(4));
+                  fScroll.addView(filterRow);
+                  wrap.addView(fScroll);
+
+                  String[] fLabels = {"الكل", "الناقص", "المكتمل", "❤️ المفضلة", "👁 غير مشاهد"};
+                  Button[] fBtns = new Button[fLabels.length];
+                  for (int i = 0; i < fLabels.length; i++) {
+                      final int val = i;
+                      Button b = makeSmallBtn(fLabels[i], i == 0 ? accent() : "#1E293B");
+                      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32));
+                      lp.setMargins(dp(4), 0, 0, 0);
+                      b.setLayoutParams(lp);
+                      b.setOnClickListener(v -> {
+                          if (isMovies) movieFilter = val; else tvFilter = val;
+                          for (int j = 0; j < fBtns.length; j++) fBtns[j].setBackground(roundBg(j == val ? accent() : "#1E293B", 8));
+                          renderLibrary(isMovies);
+                      });
+                      fBtns[i] = b;
+                      filterRow.addView(b);
+                  }
+
+                  if (isMovies) {
+                      HorizontalScrollView gScroll = new HorizontalScrollView(this);
+                      gScroll.setHorizontalScrollBarEnabled(false);
+                      genreChipsMovies = new LinearLayout(this);
+                      genreChipsMovies.setOrientation(LinearLayout.HORIZONTAL);
+                      genreChipsMovies.setPadding(0, dp(4), 0, dp(4));
+                      gScroll.addView(genreChipsMovies);
+                      wrap.addView(gScroll);
+                  }
+
+                  TextView stats = new TextView(this);
+                  stats.setTextColor(Color.parseColor("#94A3B8"));
+                  stats.setTextSize(11);
+                  stats.setPadding(dp(4), dp(2), dp(4), dp(6));
+                  wrap.addView(stats);
+                  if (isMovies) tvMoviesStats = stats; else tvTvStats = stats;
+
+                  ScrollView sv = new ScrollView(this);
+                  sv.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+                  LinearLayout scrollInner = new LinearLayout(this);
+                  scrollInner.setOrientation(LinearLayout.VERTICAL);
+                  sv.addView(scrollInner);
+                  wrap.addView(sv);
+
+                  if (isMovies) {
+                      spotlightBox = new LinearLayout(this);
+                      spotlightBox.setOrientation(LinearLayout.VERTICAL);
+                      scrollInner.addView(spotlightBox);
+                  }
+
+                  LinearLayout listContainer = new LinearLayout(this);
+                  listContainer.setOrientation(LinearLayout.VERTICAL);
+                  scrollInner.addView(listContainer);
+
+                  if (isMovies) listMoviesContainer = listContainer; else listTvContainer = listContainer;
+                  return wrap;
+              }
+
+              private LinearLayout buildToolsTab() {
+                  LinearLayout wrap = new LinearLayout(this);
+                  wrap.setOrientation(LinearLayout.VERTICAL);
+                  ScrollView sv = new ScrollView(this);
+                  sv.setFillViewport(true);
+                  LinearLayout inner = new LinearLayout(this);
+                  inner.setOrientation(LinearLayout.VERTICAL);
+                  inner.setPadding(dp(14), dp(12), dp(14), dp(22));
+                  sv.addView(inner);
+                  wrap.addView(sv);
+
+                  tvDashboard = new TextView(this);
+                  tvDashboard.setBackground(cardBg("#131B2E", "#1E293B", 12));
+                  tvDashboard.setTextColor(Color.parseColor("#E2E8F0"));
+                  tvDashboard.setTextSize(12);
+                  tvDashboard.setLineSpacing(dp(4), 1f);
+                  tvDashboard.setPadding(dp(14), dp(12), dp(14), dp(12));
+                  tvDashboard.setText("جاري قراءة إحصائيات المكتبة...");
+                  inner.addView(tvDashboard);
+
+                  // Built-in HTTP Stream Server Card for LG TV & Kodi
+                  LinearLayout serverCard = makeCard();
+                  serverCard.addView(makeSectionTitle("📡 سيرفر البث المحلي لشاشة LG و Kodi"));
+                  tvServerStatus = new TextView(this);
+                  tvServerStatus.setText("متوقف حالياً — شغّله لبث الأفلام من موبايلك مباشرة لشاشة LG أو Kodi عبر Wi-Fi");
+                  tvServerStatus.setTextColor(Color.parseColor("#94A3B8"));
+                  tvServerStatus.setTextSize(12);
+                  serverCard.addView(tvServerStatus);
+
+                  btnServerToggle = makeBigBtn("📡 تشغيل سيرفر البث (Port 8080)", "#10B981");
+                  btnServerToggle.setOnClickListener(v -> toggleStreamServer());
+                  serverCard.addView(btnServerToggle);
+                  inner.addView(serverCard);
+
+                  btnScanAll = makeBigBtn("🚀 فحص وتجهيز شامل (الأفلام + المسلسلات)", accent());
+                  btnScanAll.setOnClickListener(v -> startBatchScrape(true, true));
+                  inner.addView(btnScanAll);
+
+                  LinearLayout.LayoutParams halfLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                  halfLp.setMargins(dp(4), dp(8), dp(4), 0);
+
+                  LinearLayout r1 = new LinearLayout(this); r1.setOrientation(LinearLayout.HORIZONTAL);
+                  btnScanMovies = makeBigBtn("🎬 فحص الأفلام", "#DC2626"); btnScanMovies.setLayoutParams(halfLp);
+                  btnScanTv = makeBigBtn("📺 فحص المسلسلات", "#2563EB"); btnScanTv.setLayoutParams(halfLp);
+                  btnScanMovies.setOnClickListener(v -> startBatchScrape(true, false));
+                  btnScanTv.setOnClickListener(v -> startBatchScrape(false, false));
+                  r1.addView(btnScanMovies); r1.addView(btnScanTv); inner.addView(r1);
+
+                  LinearLayout r2 = new LinearLayout(this); r2.setOrientation(LinearLayout.HORIZONTAL);
+                  btnOrganize = makeBigBtn("📁 تنظيم المنفرد", "#0D9488"); btnOrganize.setLayoutParams(halfLp);
+                  btnRenameAll = makeBigBtn("🏷 تسمية جماعية", "#4F46E5"); btnRenameAll.setLayoutParams(halfLp);
+                  btnOrganize.setOnClickListener(v -> runOrganizeOnly());
+                  btnRenameAll.setOnClickListener(v -> runBatchRename());
+                  r2.addView(btnOrganize); r2.addView(btnRenameAll); inner.addView(r2);
+
+                  LinearLayout r3 = new LinearLayout(this); r3.setOrientation(LinearLayout.HORIZONTAL);
+                  btnSyncSrt = makeBigBtn("💬 مزامنة أسماء SRT", "#0284C7"); btnSyncSrt.setLayoutParams(halfLp);
+                  btnNoSrt = makeBigBtn("🔎 ناقص ترجمة SRT", "#0369A1"); btnNoSrt.setLayoutParams(halfLp);
+                  btnSyncSrt.setOnClickListener(v -> runSyncSubtitles());
+                  btnNoSrt.setOnClickListener(v -> showMissingSubtitles());
+                  r3.addView(btnSyncSrt); r3.addView(btnNoSrt); inner.addView(r3);
+
+                  LinearLayout r4 = new LinearLayout(this); r4.setOrientation(LinearLayout.HORIZONTAL);
+                  btnCleanup = makeBigBtn("🧹 تنظيف التالف", "#7C3AED"); btnCleanup.setLayoutParams(halfLp);
+                  btnDupes = makeBigBtn("👯 كشف المكرر", "#D97706"); btnDupes.setLayoutParams(halfLp);
+                  btnCleanup.setOnClickListener(v -> runCleanupOnly());
+                  btnDupes.setOnClickListener(v -> findDuplicates());
+                  r4.addView(btnCleanup); r4.addView(btnDupes); inner.addView(r4);
+
+                  LinearLayout r5 = new LinearLayout(this); r5.setOrientation(LinearLayout.HORIZONTAL);
+                  btnBackup = makeBigBtn("💾 نسخ احتياطي NFO", "#059669"); btnBackup.setLayoutParams(halfLp);
+                  btnRestore = makeBigBtn("♻️ استعادة NFO", "#0F766E"); btnRestore.setLayoutParams(halfLp);
+                  btnBackup.setOnClickListener(v -> runNfoBackup());
+                  btnRestore.setOnClickListener(v -> runNfoRestore());
+                  r5.addView(btnBackup); r5.addView(btnRestore); inner.addView(r5);
+
+                  LinearLayout r6 = new LinearLayout(this); r6.setOrientation(LinearLayout.HORIZONTAL);
+                  btnCsv = makeBigBtn("📊 تصدير Excel CSV", "#1D4ED8"); btnCsv.setLayoutParams(halfLp);
+                  btnHtml = makeBigBtn("🌐 كتالوج HTML", "#BE185D"); btnHtml.setLayoutParams(halfLp);
+                  btnCsv.setOnClickListener(v -> exportCsv());
+                  btnHtml.setOnClickListener(v -> exportHtml());
+                  r6.addView(btnCsv); r6.addView(btnHtml); inner.addView(r6);
+
+                  btnAnalytics = makeBigBtn("📈 لوحة التحليلات والإحصائيات المفصّلة", "#334155");
+                  btnAnalytics.setOnClickListener(v -> showAnalyticsDialog());
+                  inner.addView(btnAnalytics);
+
+                  btnStop = makeBigBtn("⏹ إيقاف الفحص الحالي", "#475569");
+                  btnStop.setEnabled(false);
+                  btnStop.setOnClickListener(v -> { stopRequested = true; appendLog("⏳ جاري الإيقاف..."); });
+                  inner.addView(btnStop);
+
+                  progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+                  progressBar.setMax(100);
+                  LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10));
+                  pbLp.setMargins(0, dp(12), 0, dp(6));
+                  progressBar.setLayoutParams(pbLp);
+                  inner.addView(progressBar);
+
+                  tvToolsStatus = new TextView(this);
+                  tvToolsStatus.setText("جاهز للعمل");
+                  tvToolsStatus.setTextColor(Color.parseColor("#38BDF8"));
+                  tvToolsStatus.setTextSize(13);
+                  tvToolsStatus.setPadding(0, 0, 0, dp(8));
+                  inner.addView(tvToolsStatus);
+
+                  logScroll = new ScrollView(this);
+                  logScroll.setBackground(cardBg("#04070E", "#1E293B", 10));
+                  logScroll.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(220)));
+                  logScroll.setPadding(dp(10), dp(10), dp(10), dp(10));
+
+                  tvLog = new TextView(this);
+                  tvLog.setTextColor(Color.parseColor("#CBD5E1"));
+                  tvLog.setTextSize(11);
+                  tvLog.setTypeface(Typeface.MONOSPACE);
+                  tvLog.setText("سجل العمليات المباشر...\n");
+                  logScroll.addView(tvLog);
+                  inner.addView(logScroll);
+
+                  return wrap;
+              }
+
+              private void toggleStreamServer() {
+                  if (streamServer.isRunning()) {
+                      streamServer.stop();
+                      btnServerToggle.setText("📡 تشغيل سيرفر البث (Port 8080)");
+                      btnServerToggle.setBackground(roundBg("#10B981", 10));
+                      tvServerStatus.setText("متوقف حالياً");
+                      tvServerStatus.setTextColor(Color.parseColor("#94A3B8"));
+                  } else {
+                      if (!hasStoragePermission()) { requestStoragePermission(); return; }
+                      File mDir = new File(etMoviesPath.getText().toString().trim());
+                      File tDir = new File(etTvPath.getText().toString().trim());
+                      try {
+                          streamServer.start(mDir, tDir, 8080);
+                          String ip = LocalStreamServer.getLocalIp();
+                          String url = "http://" + ip + ":8080/";
+                          btnServerToggle.setText("⏹ إيقاف سيرفر البث");
+                          btnServerToggle.setBackground(roundBg("#DC2626", 10));
+                          tvServerStatus.setText("✅ السيرفر شغّال الآن!\nافتح في متصفح شاشة LG أو أضفه كمصدر HTTP في Kodi:\n" + url + "\n(الأفلام: " + url + "movies/  |  المسلسلات: " + url + "tv/)");
+                          tvServerStatus.setTextColor(Color.parseColor("#34D399"));
+                      } catch (Exception e) {
+                          Toast.makeText(this, "تعذر تشغيل السيرفر: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                      }
+                  }
+              }
+
+              private void showAnalyticsDialog() {
+                  int totalMins = 0, complete = 0;
+                  Map<String, Integer> genreCounts = new HashMap<>();
+                  List<MediaHelper.MediaItem> top = new ArrayList<>(cachedMovies);
+                  Collections.sort(top, (a, b) -> Double.compare(b.ratingValue(), a.ratingValue()));
+
+                  for (MediaHelper.MediaItem m : cachedMovies) {
+                      totalMins += m.runtimeMinutes();
+                      if (m.isComplete()) complete++;
+                      for (String g : m.genreList) genreCounts.put(g, genreCounts.getOrDefault(g, 0) + 1);
+                  }
+                  int pct = cachedMovies.isEmpty() ? 0 : (complete * 100 / cachedMovies.size());
+                  int hours = totalMins / 60;
+
+                  StringBuilder sb = new StringBuilder();
+                  sb.append("🎯 نسبة اكتمال مكتبة الأفلام: ").append(pct).append("% (").append(complete).append("/").append(cachedMovies.size()).append(")\n");
+                  sb.append("⏱ إجمالي ساعات المشاهدة: ~").append(hours).append(" ساعة\n\n");
+                  sb.append("🏆 أعلى 5 أفلام تقييماً:\n");
+                  for (int i = 0; i < Math.min(5, top.size()); i++) {
+                      MediaHelper.MediaItem m = top.get(i);
+                      sb.append((i + 1)).append(". ").append(m.displayTitle).append(" (★ ").append(m.rating).append(")\n");
+                  }
+                  if (!genreCounts.isEmpty()) {
+                      sb.append("\n🎭 أكثر الأنواع في مكتبتك:\n");
+                      List<Map.Entry<String, Integer>> gl = new ArrayList<>(genreCounts.entrySet());
+                      Collections.sort(gl, (a, b) -> Integer.compare(b.getValue(), a.getValue()));
+                      for (int i = 0; i < Math.min(6, gl.size()); i++) {
+                          sb.append("• ").append(gl.get(i).getKey()).append(": ").append(gl.get(i).getValue()).append(" فيلم\n");
+                      }
+                  }
+                  new AlertDialog.Builder(this)
+                      .setTitle("📈 تحليلات المكتبة السينمائية")
+                      .setMessage(sb.toString())
+                      .setPositiveButton("ممتاز", null)
+                      .show();
+              }
+
+              private LinearLayout buildSettingsTab() {
+                  LinearLayout wrap = new LinearLayout(this);
+                  wrap.setOrientation(LinearLayout.VERTICAL);
+                  ScrollView sv = new ScrollView(this);
+                  sv.setFillViewport(true);
+                  LinearLayout inner = new LinearLayout(this);
+                  inner.setOrientation(LinearLayout.VERTICAL);
+                  inner.setPadding(dp(14), dp(12), dp(14), dp(24));
+                  sv.addView(inner);
+                  wrap.addView(sv);
+
+                  btnPerm = makeBigBtn("🔓 منح صلاحية الوصول الكامل للملفات", "#D97706");
+                  btnPerm.setOnClickListener(v -> requestStoragePermission());
+                  inner.addView(btnPerm);
+
+                  LinearLayout cardTheme = makeCard();
+                  cardTheme.addView(makeSectionTitle("🎨 لون وثيم التطبيق"));
+                  LinearLayout tRow = new LinearLayout(this);
+                  tRow.setOrientation(LinearLayout.HORIZONTAL);
+                  String[] tNames = {"🔴 سينمائي", "🔵 أزرق", "🟣 نيون", "🟢 زمردي"};
+                  for (int i = 0; i < tNames.length; i++) {
+                      final int ti = i;
+                      Button tb = makeSmallBtn(tNames[i], THEME_ACCENTS[i]);
+                      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(36), 1f);
+                      lp.setMargins(dp(3), dp(4), dp(3), 0);
+                      tb.setLayoutParams(lp);
+                      tb.setOnClickListener(v -> {
+                          themeIdx = ti;
+                          getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("theme_idx", ti).apply();
+                          recreate();
+                      });
+                      tRow.addView(tb);
+                  }
+                  cardTheme.addView(tRow);
+                  inner.addView(cardTheme);
+
+                  LinearLayout cardPaths = makeCard();
+                  cardPaths.addView(makeSectionTitle("📂 مسارات المكتبة (الذاكرة أو فلاشة OTG)"));
+                  cardPaths.addView(makeLabel("مسار مجلد الأفلام (Movies):"));
+                  LinearLayout rowM = new LinearLayout(this); rowM.setOrientation(LinearLayout.HORIZONTAL);
+                  etMoviesPath = makeInput("/storage/emulated/0/Movies");
+                  etMoviesPath.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                  Button btnBrowseM = makeSmallBtn("📂 تصفح", "#2563EB");
+                  btnBrowseM.setOnClickListener(v -> showFolderPicker(etMoviesPath));
+                  rowM.addView(etMoviesPath); rowM.addView(btnBrowseM); cardPaths.addView(rowM);
+
+                  cardPaths.addView(makeLabel("مسار مجلد المسلسلات (TV Shows):"));
+                  LinearLayout rowT = new LinearLayout(this); rowT.setOrientation(LinearLayout.HORIZONTAL);
+                  etTvPath = makeInput("/storage/emulated/0/Movies/TVShows");
+                  etTvPath.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                  Button btnBrowseT = makeSmallBtn("📂 تصفح", "#2563EB");
+                  btnBrowseT.setOnClickListener(v -> showFolderPicker(etTvPath));
+                  rowT.addView(etTvPath); rowT.addView(btnBrowseT); cardPaths.addView(rowT);
+                  inner.addView(cardPaths);
+
+                  LinearLayout cardApi = makeCard();
+                  cardApi.addView(makeSectionTitle("🔑 TMDB واللغة وجودة الصور"));
+                  cardApi.addView(makeLabel("مفتاح TMDB API (مدمج تلقائياً):"));
+                  etApiKey = makeInput(MediaHelper.DEFAULT_TMDB_KEY);
+                  cardApi.addView(etApiKey);
+
+                  cardApi.addView(makeLabel("لغة البيانات والوصف:"));
+                  RadioGroup rgLang = new RadioGroup(this); rgLang.setOrientation(LinearLayout.HORIZONTAL);
+                  rbAr = makeRadio("العربية (ar-EG)"); rbEn = makeRadio("English (en-US)");
+                  rgLang.addView(rbAr); rgLang.addView(rbEn); cardApi.addView(rgLang);
+
+                  cardApi.addView(makeLabel("جودة الصور:"));
+                  RadioGroup rgQual = new RadioGroup(this); rgQual.setOrientation(LinearLayout.HORIZONTAL);
+                  rbQualMed = makeRadio("خفيفة"); rbQualHigh = makeRadio("عالية HD"); rbQualOrig = makeRadio("أصلية 4K");
+                  rgQual.addView(rbQualMed); rgQual.addView(rbQualHigh); rgQual.addView(rbQualOrig);
+                  cardApi.addView(rgQual);
+                  inner.addView(cardApi);
+
+                  LinearLayout cardArt = makeCard();
+                  cardArt.addView(makeSectionTitle("🎨 خيارات الصور والتنظيم"));
+                  cbPoster = makeCheck("تحميل البوستر (poster.jpg)", true);
+                  cbFanart = makeCheck("تحميل الخلفية (fanart.jpg)", true);
+                  cbLogo = makeCheck("تحميل اللوجو الشفاف (clearlogo.png)", true);
+                  cbLandscape = makeCheck("تحميل الخلفية الأفقية (landscape.jpg)", true);
+                  cbSeasonPosters = makeCheck("تحميل بوسترات المواسم للمسلسلات", true);
+                  cbEpThumbs = makeCheck("تحميل صور مصغرة لكل حلقة (-thumb.jpg)", false);
+                  cbAutoRename = makeCheck("إعادة تسمية مجلد الفيلم تلقائياً: الاسم (السنة)", false);
+                  cbForce = makeCheck("إعادة تحميل واستبدال الملفات الموجودة بالفعل", false);
+
+                  cardArt.addView(cbPoster); cardArt.addView(cbFanart); cardArt.addView(cbLogo);
+                  cardArt.addView(cbLandscape); cardArt.addView(cbSeasonPosters); cardArt.addView(cbEpThumbs);
+                  cardArt.addView(cbAutoRename); cardArt.addView(cbForce);
+                  inner.addView(cardArt);
+
+                  Button btnSave = makeBigBtn("💾 حفظ الإعدادات وتحديث المكتبة", "#10B981");
+                  btnSave.setOnClickListener(v -> {
+                      savePrefs();
+                      Toast.makeText(this, "✅ تم حفظ الإعدادات", Toast.LENGTH_SHORT).show();
+                      refreshAllLibraries();
+                  });
+                  inner.addView(btnSave);
+
+                  return wrap;
+              }
+
+              private LinearLayout makeCard() {
+                  LinearLayout c = new LinearLayout(this);
+                  c.setOrientation(LinearLayout.VERTICAL);
+                  c.setBackground(cardBg("#131B2E", "#1E293B", 12));
+                  c.setPadding(dp(14), dp(12), dp(14), dp(14));
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  lp.setMargins(0, dp(10), 0, 0);
+                  c.setLayoutParams(lp);
+                  return c;
+              }
+
+              private TextView makeSectionTitle(String t) {
+                  TextView tv = new TextView(this);
+                  tv.setText(t); tv.setTextColor(Color.WHITE); tv.setTextSize(14);
+                  tv.setTypeface(null, Typeface.BOLD); tv.setPadding(0, 0, 0, dp(6));
+                  return tv;
+              }
+
+              private TextView makeLabel(String t) {
+                  TextView tv = new TextView(this);
+                  tv.setText(t); tv.setTextColor(Color.parseColor("#94A3B8")); tv.setTextSize(12);
+                  tv.setPadding(0, dp(8), 0, dp(4));
+                  return tv;
+              }
+
+              private EditText makeInput(String hint) {
+                  EditText et = new EditText(this);
+                  et.setHint(hint); et.setHintTextColor(Color.parseColor("#64748B"));
+                  et.setTextColor(Color.WHITE); et.setTextSize(13); et.setSingleLine(true);
+                  et.setBackground(cardBg("#090D16", "#334155", 8));
+                  et.setPadding(dp(10), dp(8), dp(10), dp(8));
+                  return et;
+              }
+
+              private RadioButton makeRadio(String text) {
+                  RadioButton rb = new RadioButton(this);
+                  rb.setText(text); rb.setTextColor(Color.WHITE); rb.setTextSize(12);
+                  rb.setPadding(dp(4), 0, dp(10), 0);
+                  return rb;
+              }
+
+              private CheckBox makeCheck(String text, boolean checked) {
+                  CheckBox cb = new CheckBox(this);
+                  cb.setText(text); cb.setTextColor(Color.parseColor("#E2E8F0"));
+                  cb.setTextSize(13); cb.setChecked(checked);
+                  return cb;
+              }
+
+              private Button makeSmallBtn(String text, String hex) {
+                  Button b = new Button(this);
+                  b.setText(text); b.setTextColor(Color.WHITE); b.setTextSize(12); b.setAllCaps(false);
+                  b.setBackground(roundBg(hex, 8)); b.setPadding(dp(8), dp(4), dp(8), dp(4));
+                  b.setMinWidth(0); b.setMinimumWidth(0);
+                  return b;
+              }
+
+              private Button makeBigBtn(String text, String hex) {
+                  Button b = new Button(this);
+                  b.setText(text); b.setTextColor(Color.WHITE); b.setTextSize(13); b.setAllCaps(false);
+                  b.setBackground(roundBg(hex, 10)); b.setPadding(dp(10), dp(11), dp(10), dp(11));
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  lp.setMargins(0, dp(8), 0, 0);
+                  b.setLayoutParams(lp);
+                  return b;
+              }
+
+              private void loadPrefs() {
+                  SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+                  etApiKey.setText(sp.getString("api_key", MediaHelper.DEFAULT_TMDB_KEY));
+                  etMoviesPath.setText(sp.getString("movies_path", "/storage/emulated/0/Movies"));
+                  etTvPath.setText(sp.getString("tv_path", "/storage/emulated/0/Movies/TVShows"));
+                  if ("en-US".equals(sp.getString("lang", "ar-EG"))) rbEn.setChecked(true); else rbAr.setChecked(true);
+                  String q = sp.getString("quality", "high");
+                  if ("med".equals(q)) rbQualMed.setChecked(true);
+                  else if ("orig".equals(q)) rbQualOrig.setChecked(true);
+                  else rbQualHigh.setChecked(true);
+
+                  cbPoster.setChecked(sp.getBoolean("dl_poster", true));
+                  cbFanart.setChecked(sp.getBoolean("dl_fanart", true));
+                  cbLogo.setChecked(sp.getBoolean("dl_logo", true));
+                  cbLandscape.setChecked(sp.getBoolean("dl_landscape", true));
+                  cbSeasonPosters.setChecked(sp.getBoolean("dl_seasons", true));
+                  cbEpThumbs.setChecked(sp.getBoolean("dl_ep_thumbs", false));
+                  cbAutoRename.setChecked(sp.getBoolean("auto_rename", false));
+                  cbForce.setChecked(sp.getBoolean("force", false));
+              }
+
+              private void savePrefs() {
+                  String q = rbQualMed.isChecked() ? "med" : (rbQualOrig.isChecked() ? "orig" : "high");
+                  getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                      .putString("api_key", etApiKey.getText().toString().trim())
+                      .putString("movies_path", etMoviesPath.getText().toString().trim())
+                      .putString("tv_path", etTvPath.getText().toString().trim())
+                      .putString("lang", rbEn.isChecked() ? "en-US" : "ar-EG")
+                      .putString("quality", q)
+                      .putBoolean("dl_poster", cbPoster.isChecked())
+                      .putBoolean("dl_fanart", cbFanart.isChecked())
+                      .putBoolean("dl_logo", cbLogo.isChecked())
+                      .putBoolean("dl_landscape", cbLandscape.isChecked())
+                      .putBoolean("dl_seasons", cbSeasonPosters.isChecked())
+                      .putBoolean("dl_ep_thumbs", cbEpThumbs.isChecked())
+                      .putBoolean("auto_rename", cbAutoRename.isChecked())
+                      .putBoolean("force", cbForce.isChecked())
+                      .apply();
+              }
+
+              private void saveUserSets() {
+                  getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                      .putStringSet("favorites", new HashSet<>(favorites))
+                      .putStringSet("watched", new HashSet<>(watched))
+                      .apply();
+              }
+
+              private MediaHelper.ScrapeOptions buildOptions() {
+                  MediaHelper.ScrapeOptions opt = new MediaHelper.ScrapeOptions();
+                  String key = etApiKey.getText().toString().trim();
+                  opt.apiKey = key.isEmpty() ? MediaHelper.DEFAULT_TMDB_KEY : key;
+                  opt.lang = rbEn.isChecked() ? "en-US" : "ar-EG";
+                  if (rbQualMed.isChecked()) { opt.posterSize = "w500"; opt.fanartSize = "w780"; }
+                  else if (rbQualOrig.isChecked()) { opt.posterSize = "original"; opt.fanartSize = "original"; }
+                  else { opt.posterSize = "w780"; opt.fanartSize = "w1280"; }
+                  opt.dlPoster = cbPoster.isChecked();
+                  opt.dlFanart = cbFanart.isChecked();
+                  opt.dlLogo = cbLogo.isChecked();
+                  opt.dlLandscape = cbLandscape.isChecked();
+                  opt.dlSeasonPosters = cbSeasonPosters.isChecked();
+                  opt.dlEpisodeThumbs = cbEpThumbs.isChecked();
+                  opt.autoRename = cbAutoRename.isChecked();
+                  opt.force = cbForce.isChecked();
+                  return opt;
+              }
+
+              private boolean hasStoragePermission() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return Environment.isExternalStorageManager();
+                  return checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+              }
+
+              private void updatePermissionButton() {
+                  if (hasStoragePermission()) {
+                      btnPerm.setText("✅ صلاحية الوصول الكامل للملفات مفعّلة");
+                      btnPerm.setBackground(roundBg("#10B981", 10));
+                  } else {
+                      btnPerm.setText("🔓 اضغط لمنح صلاحية الوصول للملفات (مطلوب)");
+                      btnPerm.setBackground(roundBg("#D97706", 10));
+                  }
+              }
+
+              private void requestStoragePermission() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                      try {
+                          Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                          intent.setData(Uri.parse("package:" + getPackageName()));
+                          startActivity(intent);
+                      } catch (Exception e) {
+                          startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+                      }
+                  } else {
+                      requestPermissions(new String[]{
+                          Manifest.permission.READ_EXTERNAL_STORAGE,
+                          Manifest.permission.WRITE_EXTERNAL_STORAGE
+                      }, 101);
+                  }
+              }
+
+              private void showFolderPicker(EditText targetInput) {
+                  List<File> roots = new ArrayList<>();
+                  roots.add(Environment.getExternalStorageDirectory());
+                  File[] vols = new File("/storage").listFiles();
+                  if (vols != null) {
+                      for (File v : vols) if (v.isDirectory() && v.canRead() && !v.getName().equals("emulated") && !v.getName().equals("self")) roots.add(v);
+                  }
+                  if (roots.size() > 1) {
+                      String[] names = new String[roots.size()];
+                      for (int i = 0; i < roots.size(); i++) names[i] = (i == 0 ? "📱 الذاكرة الداخلية: " : "💾 فلاشة USB / SD: ") + roots.get(i).getAbsolutePath();
+                      new AlertDialog.Builder(this).setTitle("اختر وحدة التخزين")
+                          .setItems(names, (d, w) -> openFolderDialog(roots.get(w), targetInput)).show();
+                  } else {
+                      File start = new File(targetInput.getText().toString().trim());
+                      if (!start.exists() || !start.isDirectory()) start = Environment.getExternalStorageDirectory();
+                      openFolderDialog(start, targetInput);
+                  }
+              }
+
+              private void openFolderDialog(File currentDir, EditText targetInput) {
+                  List<File> subDirs = new ArrayList<>();
+                  File[] list = currentDir.listFiles();
+                  if (list != null) {
+                      Arrays.sort(list, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+                      for (File f : list) if (f.isDirectory() && !f.getName().startsWith(".")) subDirs.add(f);
+                  }
+                  List<String> labels = new ArrayList<>();
+                  boolean hasParent = currentDir.getParentFile() != null && currentDir.getParentFile().canRead();
+                  if (hasParent) labels.add("⬆️ رجوع للمجلد السابق");
+                  for (File d : subDirs) labels.add("📁 " + d.getName());
+
+                  new AlertDialog.Builder(this).setTitle("📂 " + currentDir.getAbsolutePath())
+                      .setItems(labels.toArray(new String[0]), (dialog, which) -> {
+                          if (hasParent && which == 0) openFolderDialog(currentDir.getParentFile(), targetInput);
+                          else openFolderDialog(subDirs.get(hasParent ? which - 1 : which), targetInput);
+                      })
+                      .setPositiveButton("✅ اختيار هذا المجلد", (d, w) -> {
+                          targetInput.setText(currentDir.getAbsolutePath());
+                          savePrefs();
+                          refreshAllLibraries();
+                      })
+                      .setNegativeButton("إلغاء", null).show();
+              }
+
+              private void refreshAllLibraries() {
+                  if (!hasStoragePermission()) {
+                      tvMoviesStats.setText("امنح صلاحية الملفات من تبويب ⚙️ الإعدادات أولاً");
+                      tvTvStats.setText("امنح صلاحية الملفات من تبويب ⚙️ الإعدادات أولاً");
+                      return;
+                  }
+                  File mDir = new File(etMoviesPath.getText().toString().trim());
+                  File tDir = new File(etTvPath.getText().toString().trim());
+                  new Thread(() -> {
+                      List<MediaHelper.MediaItem> mList = MediaHelper.scanLibrary(mDir, true);
+                      List<MediaHelper.MediaItem> tList = MediaHelper.scanLibrary(tDir, false);
+                      cachedMovies = mList;
+                      cachedTv = tList;
+                      runOnUiThread(() -> {
+                          buildGenreChips();
+                          renderSpotlight();
+                          renderLibrary(true);
+                          renderLibrary(false);
+                          updateDashboard();
+                      });
+                  }).start();
+              }
+
+              private void buildGenreChips() {
+                  genreChipsMovies.removeAllViews();
+                  Set<String> allGenres = new TreeSet<>();
+                  for (MediaHelper.MediaItem m : cachedMovies) allGenres.addAll(m.genreList);
+                  if (allGenres.isEmpty()) return;
+
+                  List<String> list = new ArrayList<>();
+                  list.add("");
+                  list.addAll(allGenres);
+                  for (String g : list) {
+                      Button b = makeSmallBtn(g.isEmpty() ? "كل الأنواع" : g, g.equals(selectedGenre) ? "#0284C7" : "#131B2E");
+                      b.setTextSize(11);
+                      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28));
+                      lp.setMargins(dp(4), 0, 0, 0);
+                      b.setLayoutParams(lp);
+                      b.setOnClickListener(v -> { selectedGenre = g; buildGenreChips(); renderLibrary(true); });
+                      genreChipsMovies.addView(b);
+                  }
+              }
+
+              private void renderSpotlight() {
+                  spotlightBox.removeAllViews();
+                  MediaHelper.MediaItem heroItem = null;
+                  for (MediaHelper.MediaItem m : cachedMovies) {
+                      if (m.hasFanart && (heroItem == null || m.ratingValue() > heroItem.ratingValue())) heroItem = m;
+                  }
+                  if (heroItem == null) return;
+                  final MediaHelper.MediaItem featured = heroItem;
+
+                  FrameLayout hero = new FrameLayout(this);
+                  LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(165));
+                  hLp.setMargins(0, 0, 0, dp(12));
+                  hero.setLayoutParams(hLp);
+                  hero.setBackground(roundBg("#131B2E", 12));
+
+                  ImageView ivBg = new ImageView(this);
+                  ivBg.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                  ivBg.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                  Bitmap b = decodeThumb(new File(featured.folder, "fanart.jpg"), 640);
+                  if (b != null) ivBg.setImageBitmap(b);
+                  hero.addView(ivBg);
+
+                  View overlay = new View(this);
+                  overlay.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                  overlay.setBackground(darkGradientOverlay());
+                  hero.addView(overlay);
+
+                  LinearLayout info = new LinearLayout(this);
+                  info.setOrientation(LinearLayout.VERTICAL);
+                  info.setPadding(dp(12), dp(12), dp(12), dp(10));
+                  info.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+
+                  File logoFile = new File(featured.folder, "clearlogo.png");
+                  if (logoFile.exists()) {
+                      ImageView ivLogo = new ImageView(this);
+                      ivLogo.setLayoutParams(new LinearLayout.LayoutParams(dp(140), dp(46)));
+                      ivLogo.setScaleType(ImageView.ScaleType.FIT_START);
+                      Bitmap lb = decodeThumb(logoFile, 320);
+                      if (lb != null) ivLogo.setImageBitmap(lb);
+                      info.addView(ivLogo);
+                  } else {
+                      TextView tvT = new TextView(this);
+                      tvT.setText(featured.displayTitle);
+                      tvT.setTextColor(Color.WHITE); tvT.setTextSize(17); tvT.setTypeface(null, Typeface.BOLD);
+                      info.addView(tvT);
+                  }
+
+                  TextView tvSub = new TextView(this);
+                  tvSub.setText("🏆 الأعلى تقييماً  •  ★ " + featured.rating + "  •  " + featured.year + "  •  " + featured.genres);
+                  tvSub.setTextColor(Color.parseColor("#E2E8F0")); tvSub.setTextSize(11);
+                  tvSub.setMaxLines(1); tvSub.setEllipsize(TextUtils.TruncateAt.END);
+                  tvSub.setPadding(0, dp(4), 0, 0);
+                  info.addView(tvSub);
+
+                  hero.addView(info);
+                  hero.setOnClickListener(v -> showDetailDialog(featured));
+                  spotlightBox.addView(hero);
+              }
+
+              private void updateDashboard() {
+                  int mDone = 0, noSrt = 0; long mSize = 0;
+                  for (MediaHelper.MediaItem m : cachedMovies) {
+                      if (m.isComplete()) mDone++;
+                      if (!m.hasSrt) noSrt++;
+                      mSize += m.sizeBytes;
+                  }
+                  int tDone = 0, eps = 0; long tSize = 0;
+                  for (MediaHelper.MediaItem t : cachedTv) { if (t.isComplete()) tDone++; eps += t.episodeCount; tSize += t.sizeBytes; }
+                  tvDashboard.setText(
+                      "📊 ملخص المكتبة:\n" +
+                      "🎬 الأفلام: " + cachedMovies.size() + " (مكتمل: " + mDone + " | ناقص: " + (cachedMovies.size() - mDone) + " | بدون SRT: " + noSrt + ") — " + MediaHelper.formatSize(mSize) + "\n" +
+                      "📺 المسلسلات: " + cachedTv.size() + " (" + eps + " حلقة | مكتمل: " + tDone + ") — " + MediaHelper.formatSize(tSize) + "\n" +
+                      "❤️ المفضلة: " + favorites.size() + "   •   👁 تمت المشاهدة: " + watched.size()
+                  );
+              }
+
+              private void renderLibrary(boolean isMovies) {
+                  LinearLayout container = isMovies ? listMoviesContainer : listTvContainer;
+                  List<MediaHelper.MediaItem> source = new ArrayList<>(isMovies ? cachedMovies : cachedTv);
+                  String q = (isMovies ? etSearchMovies : etSearchTv).getText().toString().trim().toLowerCase(Locale.ROOT);
+                  int filter = isMovies ? movieFilter : tvFilter;
+
+                  Collections.sort(source, (a, b) -> {
+                      if (sortMode == 1) return Integer.compare(b.yearValue(), a.yearValue());
+                      if (sortMode == 2) return Double.compare(b.ratingValue(), a.ratingValue());
+                      if (sortMode == 3) return Long.compare(b.sizeBytes, a.sizeBytes);
+                      return a.displayTitle.compareToIgnoreCase(b.displayTitle);
+                  });
+
+                  List<MediaHelper.MediaItem> filtered = new ArrayList<>();
+                  int complete = 0;
+                  for (MediaHelper.MediaItem it : source) {
+                      if (it.isComplete()) complete++;
+                      String key = it.folder.getAbsolutePath();
+                      if (filter == 1 && it.isComplete()) continue;
+                      if (filter == 2 && !it.isComplete()) continue;
+                      if (filter == 3 && !favorites.contains(key)) continue;
+                      if (filter == 4 && watched.contains(key)) continue;
+                      if (isMovies && !selectedGenre.isEmpty() && !it.genreList.contains(selectedGenre)) continue;
+                      if (isMovies && !selectedCollection.isEmpty() && !selectedCollection.equals(it.collection)) continue;
+                      if (!q.isEmpty()
+                          && !it.displayTitle.toLowerCase(Locale.ROOT).contains(q)
+                          && !it.folder.getName().toLowerCase(Locale.ROOT).contains(q)
+                          && !it.genres.toLowerCase(Locale.ROOT).contains(q)
+                          && !it.director.toLowerCase(Locale.ROOT).contains(q)
+                          && !it.collection.toLowerCase(Locale.ROOT).contains(q)) continue;
+                      filtered.add(it);
+                  }
+
+                  container.removeAllViews();
+                  TextView stats = isMovies ? tvMoviesStats : tvTvStats;
+                  String colBadge = (isMovies && !selectedCollection.isEmpty()) ? ("  •  📚 " + selectedCollection) : "";
+                  stats.setText("المعروض: " + filtered.size() + " من " + source.size() + "  •  مكتمل: " + complete + "  •  ناقص: " + (source.size() - complete) + colBadge);
+
+                  if (filtered.isEmpty()) {
+                      TextView empty = new TextView(this);
+                      empty.setText(source.isEmpty()
+                          ? "لا توجد مجلدات هنا.\nاختر المسار من ⚙️ الإعدادات أو نظّم الأفلام من ⚡ الأدوات."
+                          : "لا توجد نتائج مطابقة للبحث أو الفلتر.");
+                      empty.setTextColor(Color.parseColor("#64748B"));
+                      empty.setGravity(Gravity.CENTER);
+                      empty.setPadding(dp(20), dp(40), dp(20), dp(20));
+                      container.addView(empty);
+                      return;
+                  }
+
+                  if (isGridView) {
+                      int cols = 3;
+                      for (int i = 0; i < filtered.size(); i += cols) {
+                          LinearLayout row = new LinearLayout(this);
+                          row.setOrientation(LinearLayout.HORIZONTAL);
+                          row.setPadding(0, 0, 0, dp(10));
+                          for (int c = 0; c < cols; c++) {
+                              int idx = i + c;
+                              if (idx < filtered.size()) row.addView(createGridCard(filtered.get(idx)));
+                              else {
+                                  View sp = new View(this);
+                                  sp.setLayoutParams(new LinearLayout.LayoutParams(0, 1, 1f));
+                                  row.addView(sp);
+                              }
+                          }
+                          container.addView(row);
+                      }
+                  } else {
+                      for (MediaHelper.MediaItem it : filtered) container.addView(createListCard(it));
+                  }
+              }
+
+              private Bitmap decodeThumb(File imgFile, int maxW) {
+                  try {
+                      BitmapFactory.Options opts = new BitmapFactory.Options();
+                      opts.inJustDecodeBounds = true;
+                      BitmapFactory.decodeFile(imgFile.getAbsolutePath(), opts);
+                      int scale = 1;
+                      while (opts.outWidth / scale > maxW) scale *= 2;
+                      opts.inJustDecodeBounds = false;
+                      opts.inSampleSize = scale;
+                      return BitmapFactory.decodeFile(imgFile.getAbsolutePath(), opts);
+                  } catch (Exception e) { return null; }
+              }
+
+              private View createGridCard(MediaHelper.MediaItem it) {
+                  String key = it.folder.getAbsolutePath();
+                  boolean isFav = favorites.contains(key);
+                  boolean isW = watched.contains(key);
+
+                  LinearLayout card = new LinearLayout(this);
+                  card.setOrientation(LinearLayout.VERTICAL);
+                  card.setBackground(cardBg("#131B2E", it.isComplete() ? "#1E293B" : "#92400E", 10));
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                  lp.setMargins(dp(4), 0, dp(4), 0);
+                  card.setLayoutParams(lp);
+                  card.setPadding(dp(4), dp(4), dp(4), dp(6));
+
+                  FrameLayout posterBox = new FrameLayout(this);
+                  posterBox.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(148)));
+
+                  ImageView iv = new ImageView(this);
+                  iv.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                  iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                  iv.setBackground(roundBg("#090D16", 8));
+                  File poster = new File(it.folder, "poster.jpg");
+                  if (poster.exists()) {
+                      Bitmap bmp = decodeThumb(poster, 240);
+                      if (bmp != null) iv.setImageBitmap(bmp);
+                  }
+                  posterBox.addView(iv);
+
+                  if (!it.rating.isEmpty()) {
+                      TextView rate = new TextView(this);
+                      rate.setText("★ " + it.rating);
+                      rate.setTextColor(Color.parseColor("#FBBF24"));
+                      rate.setTextSize(10); rate.setTypeface(null, Typeface.BOLD);
+                      rate.setBackground(roundBg("#CC070B14", 6));
+                      rate.setPadding(dp(5), dp(2), dp(5), dp(2));
+                      FrameLayout.LayoutParams rLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+                      rLp.setMargins(dp(4), dp(4), dp(4), dp(4));
+                      rate.setLayoutParams(rLp);
+                      posterBox.addView(rate);
+                  }
+
+                  TextView dot = new TextView(this);
+                  dot.setText(isFav ? "❤" : (isW ? "👁" : (it.isComplete() ? "✓" : "!")));
+                  dot.setTextColor(Color.WHITE); dot.setTextSize(9); dot.setTypeface(null, Typeface.BOLD);
+                  dot.setBackground(roundBg(isFav ? "#E11D48" : (isW ? "#0284C7" : (it.isComplete() ? "#10B981" : "#D97706")), 10));
+                  dot.setGravity(Gravity.CENTER);
+                  FrameLayout.LayoutParams dLp = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.TOP | Gravity.START);
+                  dLp.setMargins(dp(4), dp(4), dp(4), dp(4));
+                  dot.setLayoutParams(dLp);
+                  posterBox.addView(dot);
+
+                  card.addView(posterBox);
+
+                  TextView tvTitle = new TextView(this);
+                  tvTitle.setText(it.displayTitle);
+                  tvTitle.setTextColor(Color.WHITE); tvTitle.setTextSize(11); tvTitle.setTypeface(null, Typeface.BOLD);
+                  tvTitle.setMaxLines(1); tvTitle.setEllipsize(TextUtils.TruncateAt.END);
+                  tvTitle.setPadding(dp(2), dp(6), dp(2), dp(1));
+                  card.addView(tvTitle);
+
+                  TextView tvYr = new TextView(this);
+                  tvYr.setText((!it.year.isEmpty() ? it.year : "—") + (it.hasLogo ? " • Logo✓" : ""));
+                  tvYr.setTextColor(Color.parseColor("#94A3B8")); tvYr.setTextSize(10);
+                  tvYr.setPadding(dp(2), 0, dp(2), 0);
+                  card.addView(tvYr);
+
+                  card.setOnClickListener(v -> showDetailDialog(it));
+                  return card;
+              }
+
+              private View createListCard(MediaHelper.MediaItem it) {
+                  LinearLayout card = new LinearLayout(this);
+                  card.setOrientation(LinearLayout.HORIZONTAL);
+                  card.setBackground(cardBg("#131B2E", "#1E293B", 10));
+                  card.setPadding(dp(10), dp(10), dp(10), dp(10));
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  lp.setMargins(0, 0, 0, dp(8));
+                  card.setLayoutParams(lp);
+                  card.setGravity(Gravity.CENTER_VERTICAL);
+
+                  ImageView iv = new ImageView(this);
+                  iv.setLayoutParams(new LinearLayout.LayoutParams(dp(58), dp(86)));
+                  iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                  iv.setBackground(roundBg("#090D16", 6));
+                  File poster = new File(it.folder, "poster.jpg");
+                  if (poster.exists()) {
+                      Bitmap bmp = decodeThumb(poster, 180);
+                      if (bmp != null) iv.setImageBitmap(bmp);
+                  }
+                  card.addView(iv);
+
+                  LinearLayout info = new LinearLayout(this);
+                  info.setOrientation(LinearLayout.VERTICAL);
+                  info.setPadding(dp(12), 0, dp(6), 0);
+                  info.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+                  TextView tvName = new TextView(this);
+                  tvName.setText(it.displayTitle + (!it.year.isEmpty() ? " (" + it.year + ")" : ""));
+                  tvName.setTextColor(Color.WHITE); tvName.setTextSize(14); tvName.setTypeface(null, Typeface.BOLD);
+                  info.addView(tvName);
+
+                  TextView tvMeta = new TextView(this);
+                  String meta = (!it.rating.isEmpty() ? "★ " + it.rating + "  •  " : "")
+                      + MediaHelper.formatSize(it.sizeBytes)
+                      + (!it.isMovie ? "  •  " + it.episodeCount + " حلقة" : "")
+                      + (!it.collection.isEmpty() ? "\n📚 " + it.collection : "")
+                      + (!it.genres.isEmpty() ? "\n" + it.genres : "");
+                  tvMeta.setText(meta); tvMeta.setTextColor(Color.parseColor("#94A3B8"));
+                  tvMeta.setTextSize(11); tvMeta.setPadding(0, dp(3), 0, dp(6));
+                  info.addView(tvMeta);
+
+                  LinearLayout badges = new LinearLayout(this);
+                  badges.setOrientation(LinearLayout.HORIZONTAL);
+                  badges.addView(makeBadge("NFO", it.hasNfo));
+                  badges.addView(makeBadge("Poster", it.hasPoster));
+                  badges.addView(makeBadge("Fanart", it.hasFanart));
+                  badges.addView(makeBadge("Logo", it.hasLogo));
+                  if (it.isMovie) badges.addView(makeBadge("SRT", it.hasSrt));
+                  info.addView(badges);
+
+                  card.addView(info);
+                  card.setOnClickListener(v -> showDetailDialog(it));
+                  return card;
+              }
+
+              private TextView makeBadge(String label, boolean ok) {
+                  TextView tv = new TextView(this);
+                  tv.setText((ok ? "✓ " : "✗ ") + label);
+                  tv.setTextColor(Color.WHITE); tv.setTextSize(10);
+                  tv.setBackground(roundBg(ok ? "#15803D" : "#7F1D1D", 6));
+                  tv.setPadding(dp(5), dp(2), dp(5), dp(2));
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  lp.setMargins(dp(4), 0, 0, 0);
+                  tv.setLayoutParams(lp);
+                  return tv;
+              }
+
+              private void showDetailDialog(MediaHelper.MediaItem it) {
+                  String key = it.folder.getAbsolutePath();
+                  ScrollView sv = new ScrollView(this);
+                  sv.setBackgroundColor(Color.parseColor("#070B14"));
+
+                  LinearLayout box = new LinearLayout(this);
+                  box.setOrientation(LinearLayout.VERTICAL);
+                  box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+                  box.setPadding(dp(14), dp(14), dp(14), dp(16));
+                  sv.addView(box);
+
+                  File fanart = new File(it.folder, "fanart.jpg");
+                  if (fanart.exists()) {
+                      FrameLayout hero = new FrameLayout(this);
+                      hero.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(170)));
+                      ImageView ivBg = new ImageView(this);
+                      ivBg.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                      ivBg.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                      Bitmap b = decodeThumb(fanart, 640);
+                      if (b != null) ivBg.setImageBitmap(b);
+                      hero.addView(ivBg);
+
+                      View ov = new View(this);
+                      ov.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                      ov.setBackground(darkGradientOverlay());
+                      hero.addView(ov);
+
+                      File logo = new File(it.folder, "clearlogo.png");
+                      if (logo.exists()) {
+                          ImageView ivLogo = new ImageView(this);
+                          FrameLayout.LayoutParams lLp = new FrameLayout.LayoutParams(dp(170), dp(62), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+                          lLp.setMargins(0, 0, 0, dp(8));
+                          ivLogo.setLayoutParams(lLp);
+                          ivLogo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                          Bitmap lb = decodeThumb(logo, 400);
+                          if (lb != null) ivLogo.setImageBitmap(lb);
+                          hero.addView(ivLogo);
+                      }
+                      box.addView(hero);
+                  }
+
+                  TextView tvTitle = new TextView(this);
+                  tvTitle.setText(it.displayTitle + (!it.year.isEmpty() ? " (" + it.year + ")" : ""));
+                  tvTitle.setTextColor(Color.WHITE); tvTitle.setTextSize(18); tvTitle.setTypeface(null, Typeface.BOLD);
+                  tvTitle.setPadding(0, dp(10), 0, dp(4));
+                  box.addView(tvTitle);
+
+                  String subInfo = (!it.rating.isEmpty() ? "★ " + it.rating + "  •  " : "")
+                      + (!it.runtime.isEmpty() ? it.runtime + " دقيقة  •  " : "")
+                      + MediaHelper.formatSize(it.sizeBytes)
+                      + (!it.collection.isEmpty() ? "\n📚 السلسلة: " + it.collection : "")
+                      + (!it.genres.isEmpty() ? "\n🎭 " + it.genres : "")
+                      + (!it.director.isEmpty() ? "\n🎬 إخراج: " + it.director : "");
+                  TextView tvSub = new TextView(this);
+                  tvSub.setText(subInfo); tvSub.setTextColor(Color.parseColor("#38BDF8")); tvSub.setTextSize(12);
+                  box.addView(tvSub);
+
+                  if (!it.plot.isEmpty()) {
+                      TextView tvPlot = new TextView(this);
+                      tvPlot.setText(it.plot); tvPlot.setTextColor(Color.parseColor("#CBD5E1"));
+                      tvPlot.setTextSize(12); tvPlot.setPadding(0, dp(8), 0, dp(6));
+                      box.addView(tvPlot);
+                  }
+
+                  if (!it.actorsSummary.isEmpty()) {
+                      TextView tvCast = new TextView(this);
+                      tvCast.setText("👥 طاقم التمثيل:\n" + it.actorsSummary);
+                      tvCast.setTextColor(Color.parseColor("#94A3B8")); tvCast.setTextSize(11);
+                      tvCast.setPadding(0, dp(4), 0, dp(10));
+                      box.addView(tvCast);
+                  }
+
+                  AlertDialog dlg = new AlertDialog.Builder(this).setView(sv).setNegativeButton("إغلاق", null).create();
+
+                  LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                  hLp.setMargins(dp(3), dp(6), dp(3), 0);
+
+                  LinearLayout quickRow = new LinearLayout(this); quickRow.setOrientation(LinearLayout.HORIZONTAL);
+                  Button bFav = makeBigBtn(favorites.contains(key) ? "❤️ مفضلة" : "🤍 أضف للمفضلة", favorites.contains(key) ? "#E11D48" : "#1E293B");
+                  bFav.setLayoutParams(hLp);
+                  bFav.setOnClickListener(v -> {
+                      if (favorites.contains(key)) favorites.remove(key); else favorites.add(key);
+                      saveUserSets(); dlg.dismiss(); renderLibrary(it.isMovie); updateDashboard();
+                  });
+                  Button bWatch = makeBigBtn(watched.contains(key) ? "👁 تمت المشاهدة" : "👁 لم يُشاهد", watched.contains(key) ? "#0284C7" : "#1E293B");
+                  bWatch.setLayoutParams(hLp);
+                  bWatch.setOnClickListener(v -> {
+                      if (watched.contains(key)) watched.remove(key); else watched.add(key);
+                      saveUserSets(); dlg.dismiss(); renderLibrary(it.isMovie); updateDashboard();
+                  });
+                  quickRow.addView(bFav); quickRow.addView(bWatch); box.addView(quickRow);
+
+                  LinearLayout playRow = new LinearLayout(this); playRow.setOrientation(LinearLayout.HORIZONTAL);
+                  Button bPlay = makeBigBtn(it.isMovie ? "▶️ تشغيل الفيلم" : "🎞 الحلقات (" + it.episodeCount + ")", "#10B981");
+                  bPlay.setLayoutParams(hLp);
+                  bPlay.setOnClickListener(v -> {
+                      dlg.dismiss();
+                      if (it.isMovie) playVideo(it.mainVideo); else showEpisodesDialog(it);
+                  });
+                  Button bTrailer = makeBigBtn("🎥 الإعلان (YouTube)", "#B91C1C");
+                  bTrailer.setLayoutParams(hLp);
+                  bTrailer.setOnClickListener(v -> openTrailer(it));
+                  playRow.addView(bPlay); playRow.addView(bTrailer); box.addView(playRow);
+
+                  Button bAuto = makeBigBtn("⚡ تحديث تلقائي كامل من TMDB", accent());
+                  bAuto.setOnClickListener(v -> { dlg.dismiss(); scrapeSingleAuto(it); });
+                  box.addView(bAuto);
+
+                  LinearLayout tmdbRow = new LinearLayout(this); tmdbRow.setOrientation(LinearLayout.HORIZONTAL);
+                  Button bSearch = makeBigBtn("🔍 بحث يدوي", "#2563EB"); bSearch.setLayoutParams(hLp);
+                  bSearch.setOnClickListener(v -> { dlg.dismiss(); showManualSearchDialog(it); });
+                  Button bSimilar = makeBigBtn("✨ أعمال مشابهة", "#6D28D9"); bSimilar.setLayoutParams(hLp);
+                  bSimilar.setOnClickListener(v -> showSimilarDialog(it));
+                  tmdbRow.addView(bSearch); tmdbRow.addView(bSimilar); box.addView(tmdbRow);
+
+                  Button bArt = makeBigBtn("🖼 معرض الصور (تغيير البوستر/الخلفية/اللوجو)", "#7C3AED");
+                  bArt.setOnClickListener(v -> { dlg.dismiss(); showArtworkTypePicker(it); });
+                  box.addView(bArt);
+
+                  LinearLayout editRow = new LinearLayout(this); editRow.setOrientation(LinearLayout.HORIZONTAL);
+                  Button bSub = makeBigBtn("💬 ترجمة عربية", "#0369A1"); bSub.setLayoutParams(hLp);
+                  bSub.setOnClickListener(v -> searchSubtitlesWeb(it));
+                  Button bEdit = makeBigBtn("✏️ تعديل NFO", "#0284C7"); bEdit.setLayoutParams(hLp);
+                  bEdit.setOnClickListener(v -> { dlg.dismiss(); showNfoEditorDialog(it); });
+                  editRow.addView(bSub); editRow.addView(bEdit); box.addView(editRow);
+
+                  LinearLayout bottomRow = new LinearLayout(this); bottomRow.setOrientation(LinearLayout.HORIZONTAL);
+                  Button bRename = makeBigBtn("🏷 إعادة تسمية", "#475569"); bRename.setLayoutParams(hLp);
+                  bRename.setOnClickListener(v -> { dlg.dismiss(); renameFolderPrompt(it); });
+                  Button bDel = makeBigBtn("🗑 حذف المجلد", "#991B1B"); bDel.setLayoutParams(hLp);
+                  bDel.setOnClickListener(v -> {
+                      dlg.dismiss();
+                      new AlertDialog.Builder(this).setTitle("تأكيد الحذف")
+                          .setMessage("هل أنت متأكد من حذف:\n" + it.folder.getName() + " ؟")
+                          .setPositiveButton("حذف", (d2, w2) -> {
+                              MediaHelper.deleteRecursive(it.folder);
+                              Toast.makeText(this, "تم الحذف", Toast.LENGTH_SHORT).show();
+                              refreshAllLibraries();
+                          }).setNegativeButton("إلغاء", null).show();
+                  });
+                  bottomRow.addView(bRename); bottomRow.addView(bDel); box.addView(bottomRow);
+
+                  dlg.show();
+              }
+
+              private void showSimilarDialog(MediaHelper.MediaItem it) {
+                  if (it.tmdbId.isEmpty()) { Toast.makeText(this, "اجلب بيانات العمل أولاً", Toast.LENGTH_SHORT).show(); return; }
+                  MediaHelper.ScrapeOptions opt = buildOptions();
+                  Toast.makeText(this, "جاري جلب الأعمال المشابهة...", Toast.LENGTH_SHORT).show();
+                  new Thread(() -> {
+                      try {
+                          JSONObject obj = MediaHelper.tmdbGet((it.isMovie ? "/movie/" : "/tv/") + it.tmdbId + "/recommendations", opt.apiKey, "language=" + opt.lang);
+                          JSONArray arr = obj.optJSONArray("results");
+                          if (arr == null || arr.length() == 0) { runOnUiThread(() -> Toast.makeText(this, "لا توجد اقتراحات مشابهة", Toast.LENGTH_SHORT).show()); return; }
+                          int max = Math.min(10, arr.length());
+                          String[] items = new String[max];
+                          for (int i = 0; i < max; i++) {
+                              JSONObject o = arr.getJSONObject(i);
+                              String n = it.isMovie ? o.optString("title") : o.optString("name");
+                              String dt = it.isMovie ? o.optString("release_date", "") : o.optString("first_air_date", "");
+                              String yr = dt.length() >= 4 ? dt.substring(0, 4) : "";
+                              items[i] = n + (yr.isEmpty() ? "" : " (" + yr + ")") + String.format(Locale.US, "  ★ %.1f", o.optDouble("vote_average", 0));
+                          }
+                          runOnUiThread(() -> new AlertDialog.Builder(this)
+                              .setTitle("✨ أعمال مشابهة لـ " + it.displayTitle)
+                              .setItems(items, (d, w) -> {
+                                  String url = "https://www.youtube.com/results?search_query=" + Uri.encode(items[w] + " trailer");
+                                  startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                              })
+                              .setNegativeButton("إغلاق", null).show());
+                      } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_SHORT).show()); }
+                  }).start();
+              }
+
+              private void openTrailer(MediaHelper.MediaItem it) {
+                  MediaHelper.ScrapeOptions opt = buildOptions();
+                  if (!it.tmdbId.isEmpty()) {
+                      Toast.makeText(this, "جاري جلب الإعلان الرسمي...", Toast.LENGTH_SHORT).show();
+                      new Thread(() -> {
+                          String ytKey = MediaHelper.fetchYoutubeTrailerKey(it.isMovie, it.tmdbId, opt.apiKey);
+                          runOnUiThread(() -> {
+                              String url = (ytKey != null && !ytKey.isEmpty())
+                                  ? "https://www.youtube.com/watch?v=" + ytKey
+                                  : "https://www.youtube.com/results?search_query=" + Uri.encode(it.displayTitle + " " + it.year + " official trailer");
+                              startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                          });
+                      }).start();
+                  } else {
+                      String url = "https://www.youtube.com/results?search_query=" + Uri.encode(it.displayTitle + " " + it.year + " official trailer");
+                      startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                  }
+              }
+
+              private void searchSubtitlesWeb(MediaHelper.MediaItem it) {
+                  String q = (!it.originalTitle.isEmpty() ? it.originalTitle : it.displayTitle) + " " + it.year;
+                  startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://subdl.com/search/" + Uri.encode(q.trim()))));
+              }
+
+              private void showEpisodesDialog(MediaHelper.MediaItem it) {
+                  List<File> vids = new ArrayList<>();
+                  MediaHelper.collectVideos(it.folder, vids);
+                  if (vids.isEmpty()) { Toast.makeText(this, "لا توجد حلقات فيديو", Toast.LENGTH_SHORT).show(); return; }
+                  String[] labels = new String[vids.size()];
+                  for (int i = 0; i < vids.size(); i++) {
+                      File v = vids.get(i);
+                      boolean hasNfo = new File(v.getParentFile(), MediaHelper.stripExt(v.getName()) + ".nfo").exists();
+                      labels[i] = (hasNfo ? "✓ " : "✗ ") + v.getName();
+                  }
+                  new AlertDialog.Builder(this).setTitle("🎞 حلقات " + it.displayTitle)
+                      .setItems(labels, (d, w) -> playVideo(vids.get(w)))
+                      .setNegativeButton("إغلاق", null).show();
+              }
+
+              private void showArtworkTypePicker(MediaHelper.MediaItem it) {
+                  if (it.tmdbId.isEmpty()) { Toast.makeText(this, "اجلب بيانات العمل أولاً لتحديد معرف TMDB", Toast.LENGTH_LONG).show(); return; }
+                  String[] types = {"🖼 اختيار بوستر جديد (poster.jpg)", "🌄 اختيار خلفية جديدة (fanart.jpg)", "✨ اختيار لوجو شفاف جديد (clearlogo.png)"};
+                  new AlertDialog.Builder(this).setTitle("تغيير الصور من TMDB")
+                      .setItems(types, (d, w) -> openTmdbArtworkGallery(it, w)).show();
+              }
+
+              private void openTmdbArtworkGallery(MediaHelper.MediaItem it, int artType) {
+                  MediaHelper.ScrapeOptions opt = buildOptions();
+                  Toast.makeText(this, "جاري جلب الصور المتاحة...", Toast.LENGTH_SHORT).show();
+                  new Thread(() -> {
+                      try {
+                          JSONObject imgObj = MediaHelper.tmdbGet((it.isMovie ? "/movie/" : "/tv/") + it.tmdbId + "/images", opt.apiKey, "");
+                          String key = artType == 0 ? "posters" : (artType == 1 ? "backdrops" : "logos");
+                          JSONArray arr = imgObj.optJSONArray(key);
+                          if (arr == null || arr.length() == 0) { runOnUiThread(() -> Toast.makeText(this, "لا توجد صور متاحة", Toast.LENGTH_LONG).show()); return; }
+                          int max = Math.min(12, arr.length());
+                          List<String> paths = new ArrayList<>();
+                          List<Bitmap> thumbs = new ArrayList<>();
+                          for (int i = 0; i < max; i++) {
+                              String fp = arr.getJSONObject(i).optString("file_path", "");
+                              if (fp.isEmpty()) continue;
+                              paths.add(fp);
+                              thumbs.add(downloadBitmap(MediaHelper.TMDB_IMG + "/w300" + fp));
+                          }
+                          runOnUiThread(() -> {
+                              HorizontalScrollView hsv = new HorizontalScrollView(this);
+                              hsv.setBackgroundColor(Color.parseColor("#070B14"));
+                              LinearLayout row = new LinearLayout(this);
+                              row.setOrientation(LinearLayout.HORIZONTAL);
+                              row.setPadding(dp(12), dp(14), dp(12), dp(14));
+                              hsv.addView(row);
+
+                              AlertDialog galleryDlg = new AlertDialog.Builder(this)
+                                  .setTitle("اضغط على الصورة المطلوبة لحفظها")
+                                  .setView(hsv).setNegativeButton("إلغاء", null).create();
+
+                              for (int i = 0; i < paths.size(); i++) {
+                                  final String fp = paths.get(i);
+                                  ImageView iv = new ImageView(this);
+                                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(artType == 0 ? dp(110) : dp(190), artType == 0 ? dp(165) : dp(115));
+                                  lp.setMargins(dp(6), 0, dp(6), 0);
+                                  iv.setLayoutParams(lp);
+                                  iv.setScaleType(artType == 2 ? ImageView.ScaleType.FIT_CENTER : ImageView.ScaleType.CENTER_CROP);
+                                  iv.setBackground(cardBg("#1E293B", "#475569", 8));
+                                  if (thumbs.get(i) != null) iv.setImageBitmap(thumbs.get(i));
+                                  iv.setOnClickListener(v -> {
+                                      galleryDlg.dismiss();
+                                      String size = artType == 0 ? opt.posterSize : (artType == 1 ? opt.fanartSize : "original");
+                                      String fname = artType == 0 ? "poster.jpg" : (artType == 1 ? "fanart.jpg" : "clearlogo.png");
+                                      Toast.makeText(this, "جاري تحميل " + fname + "...", Toast.LENGTH_SHORT).show();
+                                      new Thread(() -> {
+                                          boolean ok = MediaHelper.downloadFile(MediaHelper.TMDB_IMG + "/" + size + fp, new File(it.folder, fname));
+                                          runOnUiThread(() -> { Toast.makeText(this, ok ? "✅ تم تحديث " + fname : "فشل التحميل", Toast.LENGTH_SHORT).show(); refreshAllLibraries(); });
+                                      }).start();
+                                  });
+                                  row.addView(iv);
+                              }
+                              galleryDlg.show();
+                          });
+                      } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+                  }).start();
+              }
+
+              private Bitmap downloadBitmap(String urlStr) {
+                  try {
+                      HttpURLConnection c = (HttpURLConnection) new URL(urlStr).openConnection();
+                      c.setConnectTimeout(10000); c.setReadTimeout(15000);
+                      try (InputStream in = c.getInputStream()) { return BitmapFactory.decodeStream(in); }
+                      finally { c.disconnect(); }
+                  } catch (Exception e) { return null; }
+              }
+
+              private void playVideo(File video) {
+                  if (video == null || !video.exists()) return;
+                  try {
+                      Intent i = new Intent(Intent.ACTION_VIEW);
+                      i.setDataAndType(Uri.fromFile(video), "video/*");
+                      i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                      startActivity(Intent.createChooser(i, "تشغيل الفيديو باستخدام"));
+                  } catch (Exception e) { Toast.makeText(this, "تعذر فتح المشغل", Toast.LENGTH_LONG).show(); }
+              }
+
+              private void renameFolderPrompt(MediaHelper.MediaItem it) {
+                  EditText input = new EditText(this);
+                  String suggested = (!it.originalTitle.isEmpty() ? it.originalTitle : it.displayTitle) + (!it.year.isEmpty() ? " (" + it.year + ")" : "");
+                  input.setText(MediaHelper.sanitizeFilename(suggested));
+                  new AlertDialog.Builder(this).setTitle("🏷 إعادة تسمية المجلد").setView(input)
+                      .setPositiveButton("حفظ", (d, w) -> {
+                          String nn = MediaHelper.sanitizeFilename(input.getText().toString().trim());
+                          if (!nn.isEmpty()) {
+                              File dest = new File(it.folder.getParentFile(), nn);
+                              if (!dest.exists() && it.folder.renameTo(dest)) { Toast.makeText(this, "✅ تم تغيير الاسم", Toast.LENGTH_SHORT).show(); refreshAllLibraries(); }
+                              else Toast.makeText(this, "تعذر تغيير الاسم", Toast.LENGTH_SHORT).show();
+                          }
+                      }).setNegativeButton("إلغاء", null).show();
+              }
+
+              private void showNfoEditorDialog(MediaHelper.MediaItem it) {
+                  File nfoFile = new File(it.folder, it.isMovie ? "movie.nfo" : "tvshow.nfo");
+                  String xml = MediaHelper.readText(nfoFile);
+
+                  ScrollView sv = new ScrollView(this);
+                  LinearLayout box = new LinearLayout(this);
+                  box.setOrientation(LinearLayout.VERTICAL);
+                  box.setPadding(dp(16), dp(12), dp(16), dp(12));
+                  sv.addView(box);
+
+                  EditText etTitle = new EditText(this); etTitle.setHint("العنوان");
+                  etTitle.setText(MediaHelper.extractXmlTag(xml, "title").isEmpty() ? it.displayTitle : MediaHelper.extractXmlTag(xml, "title"));
+                  EditText etYear = new EditText(this); etYear.setHint("السنة");
+                  etYear.setText(MediaHelper.extractXmlTag(xml, "year").isEmpty() ? it.year : MediaHelper.extractXmlTag(xml, "year"));
+                  EditText etRating = new EditText(this); etRating.setHint("التقييم");
+                  etRating.setText(MediaHelper.extractXmlTag(xml, "rating"));
+                  EditText etPlot = new EditText(this); etPlot.setHint("القصة / الوصف"); etPlot.setMinLines(4);
+                  etPlot.setText(MediaHelper.extractXmlTag(xml, "plot"));
+
+                  box.addView(etTitle); box.addView(etYear); box.addView(etRating); box.addView(etPlot);
+
+                  new AlertDialog.Builder(this).setTitle("✏️ تعديل " + nfoFile.getName()).setView(sv)
+                      .setPositiveButton("حفظ", (d, w) -> {
+                          try {
+                              String rootTag = it.isMovie ? "movie" : "tvshow";
+                              String updated;
+                              if (xml.contains("<" + rootTag + ">")) {
+                                  updated = replaceOrInsertTag(xml, "title", etTitle.getText().toString().trim(), rootTag);
+                                  updated = replaceOrInsertTag(updated, "year", etYear.getText().toString().trim(), rootTag);
+                                  updated = replaceOrInsertTag(updated, "rating", etRating.getText().toString().trim(), rootTag);
+                                  updated = replaceOrInsertTag(updated, "plot", etPlot.getText().toString().trim(), rootTag);
+                              } else {
+                                  updated = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<" + rootTag + ">\n"
+                                      + "  <title>" + MediaHelper.esc(etTitle.getText().toString().trim()) + "</title>\n"
+                                      + "  <year>" + MediaHelper.esc(etYear.getText().toString().trim()) + "</year>\n"
+                                      + "  <rating>" + MediaHelper.esc(etRating.getText().toString().trim()) + "</rating>\n"
+                                      + "  <plot>" + MediaHelper.esc(etPlot.getText().toString().trim()) + "</plot>\n"
+                                      + "</" + rootTag + ">\n";
+                              }
+                              MediaHelper.writeText(nfoFile, updated);
+                              Toast.makeText(this, "✅ تم حفظ NFO", Toast.LENGTH_SHORT).show();
+                              refreshAllLibraries();
+                          } catch (Exception e) { Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+                      }).setNegativeButton("إلغاء", null).show();
+              }
+
+              private String replaceOrInsertTag(String xml, String tag, String val, String rootTag) {
+                  String safe = MediaHelper.esc(val);
+                  if (xml.contains("<" + tag + ">")) {
+                      return xml.replaceAll("(?s)<" + tag + ">.*?</" + tag + ">", "<" + tag + ">" + java.util.regex.Matcher.quoteReplacement(safe) + "</" + tag + ">");
+                  }
+                  return xml.replace("</" + rootTag + ">", "  <" + tag + ">" + safe + "</" + tag + ">\n</" + rootTag + ">");
+              }
+
+              private void showManualSearchDialog(MediaHelper.MediaItem it) {
+                  EditText etQuery = new EditText(this);
+                  etQuery.setText(it.displayTitle);
+                  new AlertDialog.Builder(this).setTitle("🔍 بحث يدوي على TMDB").setView(etQuery)
+                      .setPositiveButton("بحث", (d, w) -> {
+                          String q = etQuery.getText().toString().trim();
+                          if (q.isEmpty()) return;
+                          MediaHelper.ScrapeOptions opt = buildOptions();
+                          Toast.makeText(this, "جاري البحث...", Toast.LENGTH_SHORT).show();
+                          new Thread(() -> {
+                              try {
+                                  JSONArray res = MediaHelper.searchTmdb(it.isMovie, q, null, opt.apiKey, opt.lang);
+                                  int count = Math.min(10, res.length());
+                                  if (count == 0) { runOnUiThread(() -> Toast.makeText(this, "لا توجد نتائج", Toast.LENGTH_LONG).show()); return; }
+                                  String[] choices = new String[count];
+                                  int[] ids = new int[count];
+                                  for (int i = 0; i < count; i++) {
+                                      JSONObject o = res.getJSONObject(i);
+                                      ids[i] = o.getInt("id");
+                                      String name = it.isMovie ? o.optString("title") : o.optString("name");
+                                      String date = it.isMovie ? o.optString("release_date", "") : o.optString("first_air_date", "");
+                                      choices[i] = name + (date.length() >= 4 ? " (" + date.substring(0, 4) + ")" : "");
+                                  }
+                                  runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("اختر النتيجة الصحيحة:")
+                                      .setItems(choices, (dlg, idx) -> { opt.force = true; scrapeSingleById(it, ids[idx], opt); })
+                                      .setNegativeButton("إلغاء", null).show());
+                              } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+                          }).start();
+                      }).setNegativeButton("إلغاء", null).show();
+              }
+
+              private void scrapeSingleById(MediaHelper.MediaItem it, int tmdbId, MediaHelper.ScrapeOptions opt) {
+                  Toast.makeText(this, "جاري التحميل...", Toast.LENGTH_SHORT).show();
+                  new Thread(() -> {
+                      try {
+                          if (it.isMovie) MediaHelper.scrapeMovieById(it.folder, tmdbId, opt, this::appendLog);
+                          else MediaHelper.scrapeTvById(it.folder, tmdbId, opt, this::appendLog);
+                          runOnUiThread(() -> { Toast.makeText(this, "✅ تم التحديث!", Toast.LENGTH_SHORT).show(); refreshAllLibraries(); });
+                      } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+                  }).start();
+              }
+
+              private void scrapeSingleAuto(MediaHelper.MediaItem it) {
+                  MediaHelper.ScrapeOptions opt = buildOptions(); opt.force = true;
+                  Toast.makeText(this, "جاري جلب البيانات...", Toast.LENGTH_SHORT).show();
+                  new Thread(() -> {
+                      try {
+                          String[] ny = MediaHelper.cleanNameAndYear(it.folder.getName());
+                          JSONArray res = MediaHelper.searchTmdb(it.isMovie, ny[0].isEmpty() ? it.displayTitle : ny[0], ny[1], opt.apiKey, opt.lang);
+                          if (res.length() == 0) { runOnUiThread(() -> Toast.makeText(this, "لم يتم العثور — جرّب البحث اليدوي", Toast.LENGTH_LONG).show()); return; }
+                          int id = res.getJSONObject(0).getInt("id");
+                          if (it.isMovie) MediaHelper.scrapeMovieById(it.folder, id, opt, this::appendLog);
+                          else MediaHelper.scrapeTvById(it.folder, id, opt, this::appendLog);
+                          runOnUiThread(() -> { Toast.makeText(this, "✅ تم التحديث!", Toast.LENGTH_SHORT).show(); refreshAllLibraries(); });
+                      } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+                  }).start();
+              }
+
+              private void runOrganizeOnly() {
+                  if (!hasStoragePermission()) { requestStoragePermission(); return; }
+                  File mDir = new File(etMoviesPath.getText().toString().trim());
+                  if (!mDir.exists()) return;
+                  new Thread(() -> {
+                      int n = MediaHelper.organizeLooseMovies(mDir, this::appendLog);
+                      runOnUiThread(() -> { Toast.makeText(this, "تم تنظيم " + n + " فيلم", Toast.LENGTH_LONG).show(); refreshAllLibraries(); });
+                  }).start();
+              }
+
+              private void runSyncSubtitles() {
+                  new Thread(() -> {
+                      int n = MediaHelper.syncSubtitleNames(cachedMovies, this::appendLog);
+                      runOnUiThread(() -> { Toast.makeText(this, "💬 تم مطابقة أسماء " + n + " ملف ترجمة مع الفيديو تلقائياً", Toast.LENGTH_LONG).show(); refreshAllLibraries(); });
+                  }).start();
+              }
+
+              private void runBatchRename() {
+                  new AlertDialog.Builder(this).setTitle("🏷 إعادة تسمية جماعية")
+                      .setMessage("سيتم إعادة تسمية كل مجلدات الأفلام إلى: Name (Year). هل تريد المتابعة؟")
+                      .setPositiveButton("نعم، ابدأ", (d, w) -> new Thread(() -> {
+                          int n = MediaHelper.batchRenameMovies(cachedMovies, this::appendLog);
+                          runOnUiThread(() -> { Toast.makeText(this, "✅ تم إعادة تسمية " + n + " مجلد", Toast.LENGTH_LONG).show(); refreshAllLibraries(); });
+                      }).start())
+                      .setNegativeButton("إلغاء", null).show();
+              }
+
+              private void runCleanupOnly() {
+                  if (!hasStoragePermission()) { requestStoragePermission(); return; }
+                  File mDir = new File(etMoviesPath.getText().toString().trim());
+                  File tDir = new File(etTvPath.getText().toString().trim());
+                  new Thread(() -> {
+                      int n = MediaHelper.cleanupBrokenFiles(mDir, this::appendLog) + MediaHelper.cleanupBrokenFiles(tDir, this::appendLog);
+                      runOnUiThread(() -> { Toast.makeText(this, "🧹 تم حذف " + n + " ملف تالف", Toast.LENGTH_LONG).show(); refreshAllLibraries(); });
+                  }).start();
+              }
+
+              private void runNfoBackup() {
+                  if (!hasStoragePermission()) { requestStoragePermission(); return; }
+                  File mDir = new File(etMoviesPath.getText().toString().trim());
+                  if (!mDir.exists()) return;
+                  new Thread(() -> {
+                      List<MediaHelper.MediaItem> all = new ArrayList<>();
+                      all.addAll(cachedMovies); all.addAll(cachedTv);
+                      int n = MediaHelper.backupNfoFiles(mDir, all, this::appendLog);
+                      runOnUiThread(() -> Toast.makeText(this, "💾 تم حفظ نسخة احتياطية لـ " + n + " ملف NFO", Toast.LENGTH_LONG).show());
+                  }).start();
+              }
+
+              private void runNfoRestore() {
+                  if (!hasStoragePermission()) { requestStoragePermission(); return; }
+                  File mDir = new File(etMoviesPath.getText().toString().trim());
+                  if (!mDir.exists()) return;
+                  new Thread(() -> {
+                      List<MediaHelper.MediaItem> all = new ArrayList<>();
+                      all.addAll(cachedMovies); all.addAll(cachedTv);
+                      int n = MediaHelper.restoreNfoFiles(mDir, all, this::appendLog);
+                      runOnUiThread(() -> { Toast.makeText(this, "♻️ تم استعادة " + n + " ملف NFO", Toast.LENGTH_LONG).show(); refreshAllLibraries(); });
+                  }).start();
+              }
+
+              private void findDuplicates() {
+                  Map<String, List<String>> seen = new HashMap<>();
+                  for (MediaHelper.MediaItem m : cachedMovies) {
+                      String k = !m.tmdbId.isEmpty() ? ("tmdb:" + m.tmdbId) : m.displayTitle.toLowerCase(Locale.ROOT);
+                      seen.computeIfAbsent(k, x -> new ArrayList<>()).add(m.folder.getName());
+                  }
+                  StringBuilder sb = new StringBuilder();
+                  for (Map.Entry<String, List<String>> e : seen.entrySet()) {
+                      if (e.getValue().size() > 1) sb.append("• ").append(String.join("  ↔  ", e.getValue())).append("\n");
+                  }
+                  new AlertDialog.Builder(this).setTitle("👯 الأفلام المكررة")
+                      .setMessage(sb.length() == 0 ? "✅ لا توجد أفلام مكررة!" : sb.toString())
+                      .setPositiveButton("حسناً", null).show();
+              }
+
+              private void showMissingSubtitles() {
+                  List<MediaHelper.MediaItem> miss = new ArrayList<>();
+                  for (MediaHelper.MediaItem m : cachedMovies) if (!m.hasSrt) miss.add(m);
+                  if (miss.isEmpty()) { Toast.makeText(this, "✅ كل الأفلام تحتوي على ترجمة SRT!", Toast.LENGTH_LONG).show(); return; }
+                  String[] names = new String[miss.size()];
+                  for (int i = 0; i < miss.size(); i++) names[i] = "💬 " + miss.get(i).displayTitle + " (" + miss.get(i).year + ")";
+                  new AlertDialog.Builder(this).setTitle("أفلام بدون ترجمة (" + miss.size() + ") — اضغط للبحث")
+                      .setItems(names, (d, w) -> searchSubtitlesWeb(miss.get(w)))
+                      .setNegativeButton("إغلاق", null).show();
+              }
+
+              private void exportCsv() {
+                  File mDir = new File(etMoviesPath.getText().toString().trim());
+                  if (!mDir.exists()) return;
+                  new Thread(() -> {
+                      try {
+                          File out = MediaHelper.exportCsvReport(mDir, cachedMovies, cachedTv);
+                          runOnUiThread(() -> Toast.makeText(this, "📊 تم التصدير:\n" + out.getAbsolutePath(), Toast.LENGTH_LONG).show());
+                      } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+                  }).start();
+              }
+
+              private void exportHtml() {
+                  File mDir = new File(etMoviesPath.getText().toString().trim());
+                  if (!mDir.exists()) return;
+                  new Thread(() -> {
+                      try {
+                          File out = MediaHelper.exportHtmlCatalog(mDir, cachedMovies, cachedTv);
+                          runOnUiThread(() -> Toast.makeText(this, "🌐 تم إنشاء الكتالوج:\n" + out.getAbsolutePath(), Toast.LENGTH_LONG).show());
+                      } catch (Exception e) { runOnUiThread(() -> Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show()); }
+                  }).start();
+              }
+
+              private void appendLog(String msg) {
+                  runOnUiThread(() -> {
+                      tvLog.append(msg + "\n");
+                      logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+                  });
+              }
+
+              private void setToolsUiRunning(boolean running) {
+                  isRunning = running;
+                  runOnUiThread(() -> {
+                      btnScanAll.setEnabled(!running); btnScanMovies.setEnabled(!running); btnScanTv.setEnabled(!running);
+                      btnOrganize.setEnabled(!running); btnRenameAll.setEnabled(!running); btnCleanup.setEnabled(!running);
+                      btnStop.setEnabled(running);
+                  });
+              }
+
+              private void startBatchScrape(boolean isMovies, boolean both) {
+                  if (isRunning) return;
+                  if (!hasStoragePermission()) { Toast.makeText(this, "امنح صلاحية الملفات أولاً", Toast.LENGTH_LONG).show(); switchTab(3); return; }
+                  savePrefs();
+                  MediaHelper.ScrapeOptions opt = buildOptions();
+
+                  stopRequested = false;
+                  setToolsUiRunning(true);
+                  runOnUiThread(() -> { tvLog.setText(""); progressBar.setProgress(0); tvToolsStatus.setText("جاري البدء..."); });
+
+                  new Thread(() -> {
+                      try {
+                          if (both || isMovies) runBatchForType(true, opt);
+                          if (!stopRequested && (both || !isMovies)) runBatchForType(false, opt);
+                          runOnUiThread(() -> {
+                              if (!stopRequested) { progressBar.setProgress(100); tvToolsStatus.setText("✅ اكتمل الفحص بنجاح!"); appendLog("\n✅ تم الانتهاء بنجاح!"); }
+                              else tvToolsStatus.setText("تم الإيقاف");
+                              refreshAllLibraries();
+                          });
+                      } finally { setToolsUiRunning(false); }
+                  }).start();
+              }
+
+              private void runBatchForType(boolean isMovies, MediaHelper.ScrapeOptions opt) {
+                  File baseDir = new File((isMovies ? etMoviesPath : etTvPath).getText().toString().trim());
+                  if (!baseDir.exists() || !baseDir.isDirectory()) { appendLog("[!] المسار غير موجود: " + baseDir.getAbsolutePath()); return; }
+                  if (isMovies) MediaHelper.organizeLooseMovies(baseDir, this::appendLog);
+                  List<MediaHelper.MediaItem> items = MediaHelper.scanLibrary(baseDir, isMovies);
+                  appendLog((isMovies ? "🎬 الأفلام: " : "📺 المسلسلات: ") + items.size() + " مجلد");
+                  int total = Math.max(1, items.size());
+                  for (int i = 0; i < items.size(); i++) {
+                      if (stopRequested) break;
+                      MediaHelper.MediaItem it = items.get(i);
+                      int pct = (int) (((i + 1) * 100.0) / total);
+                      int cur = i + 1;
+                      runOnUiThread(() -> { progressBar.setProgress(pct); tvToolsStatus.setText(cur + " / " + items.size() + " : " + it.folder.getName()); });
+                      if (!opt.force && it.isComplete()) { appendLog("⏭ تخطي (مكتمل): " + it.folder.getName()); continue; }
+                      try {
+                          String[] ny = MediaHelper.cleanNameAndYear(it.folder.getName());
+                          String query = ny[0].isEmpty() ? it.displayTitle : ny[0];
+                          appendLog("🔍 " + query + (ny[1] != null ? " (" + ny[1] + ")" : ""));
+                          JSONArray res = MediaHelper.searchTmdb(isMovies, query, ny[1], opt.apiKey, opt.lang);
+                          if (res.length() == 0) { appendLog("  [!] لا توجد نتيجة — جرّب البحث اليدوي"); continue; }
+                          int id = res.getJSONObject(0).getInt("id");
+                          if (isMovies) MediaHelper.scrapeMovieById(it.folder, id, opt, this::appendLog);
+                          else MediaHelper.scrapeTvById(it.folder, id, opt, this::appendLog);
+                      } catch (Exception e) { appendLog("  [!] خطأ: " + e.getMessage()); }
+                  }
+              }
+          }
+          EOF
+
+      - name: Build KodiMM Ultimate v5.0 APK
+        run: |
+          gradle assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk KodiMM-Ultimate-v5.apk
+          ls -lh KodiMM-Ultimate-v5.apk
+
+      - name: Upload KodiMM-Ultimate-v5.apk artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KodiMM-Ultimate-v5-APK
+          path: KodiMM-Ultimate-v5.apk
+          retention-days: 30
